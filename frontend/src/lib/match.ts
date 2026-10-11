@@ -63,14 +63,15 @@ export interface ScoredJob {
 }
 
 export function filterJobs(
-  state: Pick<AppState, 'profile' | 'prefs' | 'dismissed'>,
+  state: Pick<AppState, 'profile' | 'prefs' | 'dismissed'> & { customJobs?: Job[] },
   filters: JobFilters,
 ): { items: ScoredJob[]; hidden: number } {
-  const { profile, prefs, dismissed } = state;
+  const { profile, prefs, dismissed, customJobs } = state;
   if (!profile) return { items: [], hidden: 0 };
   let hidden = 0;
   const q = filters.q.toLowerCase();
-  const items = JOBS.filter((j) => !dismissed[j.id])
+  const catalog = customJobs && customJobs.length > 0 ? customJobs : JOBS;
+  const items = catalog.filter((j) => !dismissed[j.id])
     .map((job) => ({ job, match: matchJob(job, profile, prefs) }))
     .filter(({ job, match }) => {
       if (prefs.requireMode && prefs.mode !== 'Any' && job.mode !== prefs.mode) {

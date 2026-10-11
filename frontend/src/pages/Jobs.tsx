@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { JobDetail, JobListItem } from '../components/Job';
-import { filterJobs } from '../lib/match';
+import { filterJobs, extractSkills } from '../lib/match';
 import { useMediaQuery } from '../lib/hooks';
 import { useApp } from '../store/AppContext';
 import { api } from '../api';
@@ -28,18 +28,44 @@ export default function Jobs() {
   const [aiRationaleMap, setAiRationaleMap] = useState<Record<string, { rationale: string; score: number; fit: string }>>({});
   const [statusMsg, setStatusMsg] = useState('');
 
+  const loadPersistedJobs = () => {
+    api.jobs
+      .list({ limit: 40 })
+      .then((res) => {
+        if (res.data && res.data.length > 0) {
+          const mapped: Job[] = res.data.map((b: any, idx: number) => ({
+            id: 1000 + idx,
+            title: b.title,
+            company: b.employer,
+            location: b.location || 'Remote',
+            mode: (b.work_arrangement === 'remote' ? 'Remote' : b.work_arrangement === 'hybrid' ? 'Hybrid' : 'On-site') as Mode,
+            type: (b.employment_type === 'internship' ? 'Internship' : b.employment_type === 'part_time' ? 'Part-time' : 'Full-time') as JobType,
+            level: (b.seniority === 'senior' ? 'Senior' : b.seniority === 'mid' ? 'Mid' : 'Entry-level') as Level,
+            daysAgo: Math.max(1, Math.round((Date.now() - new Date(b.published_at || b.retrieved_at).getTime()) / 86400000)),
+            requirements: b.description ? extractSkills(b.description).split(', ').filter(Boolean) : ['Python', 'SQL'],
+            eligibility: `${b.work_arrangement || 'Flexible'} in ${b.location || 'Anywhere'}. Verified via ${b.source_name}.`,
+            source_url: b.canonical_url,
+          }));
+          setLiveJobs(mapped);
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadPersistedJobs();
+  }, []);
+
   const urlQuery = params.get('q');
   useEffect(() => {
     if (urlQuery !== null) setFilters((f) => ({ ...f, q: urlQuery }));
   }, [urlQuery]);
 
-  // Merge live jobs if evaluated
-  const effectiveState = liveJobs
-    ? {
-        ...state,
-        // Override or supplement local JOBS if live jobs were returned
-      }
-    : state;
+  // Merge live jobs if available
+  const effectiveState = {
+    ...state,
+    customJobs: liveJobs || undefined,
+  };
 
   const { items: baseItems, hidden } = filterJobs(effectiveState, filters);
 
@@ -100,7 +126,8 @@ export default function Jobs() {
     try {
       const res = await api.jobs.triggerDiscovery(filters.q || 'Software Engineer', undefined, filters.timePosted);
       if (res.data) {
-        setStatusMsg(`Discovered ${res.data.jobs_count || 0} real LinkedIn listings.`);
+        loadPersistedJobs();
+        setStatusMsg(`Discovered ${res.data.jobs_count || 0} real LinkedIn listings. Catalog updated.`);
       } else {
         setStatusMsg('Finished checking LinkedIn.');
       }

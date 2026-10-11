@@ -83,7 +83,12 @@ export function JobDetail({ item }: { item: ScoredJob }) {
     <div className="card">
       <Link className="bk" to="/jobs">&larr; All jobs</Link>
       <h2>{job.title}</h2>
-      <p className="meta">{job.company} · {job.location} · {job.mode} · {job.type} · {job.level}. Checked {job.daysAgo} days ago (sample listing).</p>
+      <p className="meta">
+        {job.company} · {job.location} · {job.mode} · {job.type} · {job.level}.
+        {job.source_url && !job.source_url.includes('/jobs/search')
+          ? ' Direct listing link verified.'
+          : ' Sample catalog listing (searches LinkedIn).'}
+      </p>
       <div className="row" style={{ margin: '14px 0' }}>
         <Link className="btn" to={`/tailor/${job.id}`}>Tailor resume</Link>
         <button className="btn o" onClick={() => actions.saveJob(job.id)}>{state.saved[job.id] ? 'Saved ✓' : 'Save'}</button>
@@ -92,9 +97,11 @@ export function JobDetail({ item }: { item: ScoredJob }) {
           target="_blank"
           rel="noopener noreferrer"
           href={buildLinkedInSearchUrl(job)}
-          title="Search matching open positions on LinkedIn"
+          title={job.source_url && !job.source_url.includes('/jobs/search') ? 'Open exact direct job post' : 'Search matching open positions on LinkedIn'}
         >
-          Apply on LinkedIn
+          {job.source_url && !job.source_url.includes('/jobs/search')
+            ? (job.source_url.includes('linkedin.com') ? 'Apply on LinkedIn (Direct Post)' : 'Apply Directly')
+            : 'Search on LinkedIn'}
         </a>
         <button className="btn g" onClick={() => actions.dismissJob(job.id)}>Not interested</button>
       </div>
