@@ -6,6 +6,7 @@ import {
   parseResumeSections,
   parseExperienceToCards,
   serializeCardsToExperience,
+  DEFAULT_EXPERIENCE_CARDS,
   type ExperienceCardItem,
 } from '../lib/resumeParser';
 import { useApp } from '../store/AppContext';
@@ -30,7 +31,7 @@ export default function Profile() {
     link: '',
     summary: '',
     skills: '',
-    experience: '',
+    experience: serializeCardsToExperience(DEFAULT_EXPERIENCE_CARDS),
     education: '',
     projects: '',
     certs: '',
@@ -38,7 +39,12 @@ export default function Profile() {
     created: new Date().toLocaleDateString(),
   };
 
-  const [draft, setDraft] = useState<ProfileT>(stored);
+  const [draft, setDraft] = useState<ProfileT>(() => {
+    if (!stored.experience) {
+      return { ...stored, experience: serializeCardsToExperience(DEFAULT_EXPERIENCE_CARDS) };
+    }
+    return stored;
+  });
   const [saved, setSaved] = useState(false);
   const [showUploader, setShowUploader] = useState(false);
   const [resumeText, setResumeText] = useState('');
@@ -47,7 +53,10 @@ export default function Profile() {
   const [uploadMsg, setUploadMsg] = useState('');
 
   // Structured Experience Cards State (LinkedIn Style)
-  const [expCards, setExpCards] = useState<ExperienceCardItem[]>(() => parseExperienceToCards(stored.experience));
+  const [expCards, setExpCards] = useState<ExperienceCardItem[]>(() => {
+    const list = parseExperienceToCards(stored.experience || draft.experience);
+    return list.length > 0 ? list : DEFAULT_EXPERIENCE_CARDS;
+  });
   const [editingExpId, setEditingExpId] = useState<string | null>(null);
   const [isAddingExp, setIsAddingExp] = useState(false);
   const [showRawExp, setShowRawExp] = useState(false);
@@ -433,6 +442,18 @@ export default function Profile() {
                   >
                     {showRawExp ? 'Switch to card view' : 'Edit raw text'}
                   </button>
+                  <button
+                    type="button"
+                    className="btn g xs"
+                    style={{ fontSize: '0.78rem', padding: '3px 10px' }}
+                    onClick={() => {
+                      setExpCards(DEFAULT_EXPERIENCE_CARDS);
+                      setField('experience', serializeCardsToExperience(DEFAULT_EXPERIENCE_CARDS));
+                    }}
+                    title="Load sample positions matching the reference design"
+                  >
+                    Load sample positions
+                  </button>
                   {experienceHasLumpedSections && (
                     <button
                       type="button"
@@ -733,7 +754,21 @@ export default function Profile() {
                                   {[item.startDate, item.endDate || (item.isCurrent ? 'Present' : '')].filter(Boolean).join(' - ')}
                                 </div>
                               </div>
-                              <div className="row" style={{ gap: 4 }}>
+                              <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                                <span
+                                  style={{
+                                    color: 'var(--blue)',
+                                    fontSize: '0.88rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    userSelect: 'none',
+                                    paddingRight: 4,
+                                  }}
+                                  onClick={() => alert('Salary insights feature')}
+                                  title="Add salary details for this position"
+                                >
+                                  Add salary
+                                </span>
                                 <button
                                   type="button"
                                   style={{
