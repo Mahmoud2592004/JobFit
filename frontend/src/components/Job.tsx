@@ -42,6 +42,34 @@ export function JobCard({ item }: { item: ScoredJob }) {
   );
 }
 
+export function buildLinkedInSearchUrl(job: ScoredJob['job']): string {
+  if (job.source_url) {
+    return job.source_url;
+  }
+
+  const params = new URLSearchParams();
+
+  // If company is one of the mock catalog names, omit it so LinkedIn finds real open listings for this job title.
+  // If it's a real company (like Fawry), include it.
+  const isMockCompany = /^(?:Nilecore|Lexica|Orbit|Delta|Sahara|Pyramid|Nile Retail)/i.test(job.company);
+  const cleanCompany = isMockCompany ? '' : job.company.replace(/\s+(?:Works|AI|Labs|Cloud)$/i, '').trim();
+
+  const queryTerms = [job.title, cleanCompany].filter(Boolean).join(' ');
+  params.set('keywords', queryTerms);
+
+  // Set location filter on LinkedIn so it doesn't default to the user's personal profile country
+  if (job.mode === 'Remote' || (job.location && job.location.toLowerCase() === 'remote')) {
+    params.set('f_WT', '2'); // LinkedIn remote filter
+  } else if (job.location) {
+    const loc = job.location.toLowerCase().includes('egypt')
+      ? job.location
+      : `${job.location}, Egypt`;
+    params.set('location', loc);
+  }
+
+  return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
+}
+
 export function JobDetail({ item }: { item: ScoredJob }) {
   const { state, actions } = useApp();
   const { job, match: m } = item;
@@ -63,7 +91,8 @@ export function JobDetail({ item }: { item: ScoredJob }) {
           className="btn g"
           target="_blank"
           rel="noopener noreferrer"
-          href={job.source_url || `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(job.title + ' ' + job.company)}`}
+          href={buildLinkedInSearchUrl(job)}
+          title="Search matching open positions on LinkedIn"
         >
           Apply on LinkedIn
         </a>
