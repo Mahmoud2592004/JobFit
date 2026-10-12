@@ -62,8 +62,19 @@ export default function Onboarding() {
             return;
           }
         }
+        if (uploadRes.status === 401) {
+          actions.logout();
+          navigate('/login', { state: { msg: 'Your session has expired. Please log in again to upload your resume.' } });
+          return;
+        }
+        if (uploadRes.error) {
+          setError(uploadRes.error);
+          setLoading(false);
+          setStatusMsg('');
+          return;
+        }
       } catch (err: any) {
-        // Fall back gracefully if backend storage or token has issues during preview
+        // Fall back gracefully if backend storage or network has issues
         setStatusMsg('Backend processing busy. Parsing locally...');
       }
     }
@@ -109,13 +120,17 @@ export default function Onboarding() {
       summary: parsed.summary || '',
       skills: parsed.skills || '',
       experience: parsed.experience || '',
+      leadership: parsed.leadership || '',
       education: parsed.education || '',
       projects: parsed.projects || '',
       certs: parsed.certs || '',
+      github: parsed.github || '',
+      other_links: parsed.other_links || [],
       confirmed: {
         summary: !!parsed.summary,
         skills: !!parsed.skills,
         experience: !!parsed.experience,
+        leadership: !!parsed.leadership,
         education: !!parsed.education,
         projects: !!parsed.projects,
         certs: !!parsed.certs,

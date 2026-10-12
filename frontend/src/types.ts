@@ -13,8 +13,13 @@ export type TemplateId = 'navy' | 'black' | 'tech';
 /** s = strong fit, p = potential fit, n = not a fit */
 export type FitTone = 's' | 'p' | 'n';
 
+export interface ItemLink {
+  label: string;
+  url: string;
+}
+
 export interface Job {
-  id: number;
+  id: number | string;
   title: string;
   company: string;
   location: string;
@@ -25,6 +30,7 @@ export interface Job {
   requirements: string[];
   eligibility: string;
   source_url?: string;
+  description?: string;
 }
 
 export interface Match {
@@ -36,9 +42,12 @@ export interface Match {
   arrangement: number;
   score: number;
   recruiterRationale?: string;
+  experienceFitAnalysis?: string;
+  preferenceFitAnalysis?: string;
+  isAiEvaluated?: boolean;
 }
 
-export type SectionKey = 'summary' | 'skills' | 'experience' | 'education' | 'projects' | 'certs';
+export type SectionKey = 'summary' | 'skills' | 'experience' | 'leadership' | 'education' | 'projects' | 'certs';
 
 export interface Profile extends Record<SectionKey, string> {
   name: string;
@@ -46,6 +55,9 @@ export interface Profile extends Record<SectionKey, string> {
   phone: string;
   location: string;
   link: string;
+  github?: string;
+  other_links?: string[];
+  years_experience?: number;
   confirmed: Partial<Record<SectionKey, boolean>>;
   created: string;
 }
@@ -53,11 +65,23 @@ export interface Profile extends Record<SectionKey, string> {
 export interface Prefs {
   titles: string;
   location: string;
+  countries?: string[];
   mode: Mode | 'Any';
   type: JobType | 'Any';
   level: Level;
   requireMode: boolean;
   requireLocation: boolean;
+  urls?: string[];
+  geoId?: string;
+  distance?: number;
+  datePosted?: 'anyTime' | 'past24Hours' | 'pastWeek' | 'pastMonth';
+  companyIds?: string[];
+  under10Applicants?: boolean;
+  autoConvertToAiSearch?: boolean;
+  scrapeCompany?: boolean;
+  limitPerSource?: number;
+  splitByLocation?: boolean;
+  splitCountry?: string;
 }
 
 export interface User {
@@ -67,7 +91,7 @@ export interface User {
 
 export interface Application {
   id: number;
-  jobId: number;
+  jobId: number | string;
   stage: Stage;
   /** Fit score at the time the job was saved */
   score: number;
@@ -81,7 +105,7 @@ export interface Application {
 
 export interface TailoredResume {
   id: number;
-  jobId: number;
+  jobId: number | string;
   name: string;
   date: string;
   state: 'Approved';
@@ -89,6 +113,7 @@ export interface TailoredResume {
   summary: string;
   skills: string;
   experience: string;
+  leadership?: string;
   coverLetter: string;
 }
 
@@ -96,19 +121,21 @@ export interface AppState {
   user: User | null;
   prefs: Prefs;
   profile: Profile | null;
-  saved: Record<number, true>;
-  dismissed: Record<number, true>;
+  saved: Record<number | string, boolean>;
+  dismissed: Record<number | string, boolean>;
   applications: Application[];
   resumes: TailoredResume[];
   nextId: number;
   alertsSeen: boolean;
   template: TemplateId;
+  jobs?: Job[];
 }
 
 export interface Draft {
   summary: string;
   skills: string;
   experience: string;
+  leadership?: string;
 }
 
 export interface JobFilters {

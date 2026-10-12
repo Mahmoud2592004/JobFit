@@ -2,6 +2,8 @@ import { lazy, Suspense, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/Logo';
 import { useReveal } from '../lib/hooks';
+import { useApp } from '../store/AppContext';
+import { sessionManager } from '../api';
 
 // three.js is only needed on the landing page, so it is split into its own chunk.
 const ProcessSection = lazy(() => import('../components/ProcessSection').then((m) => ({ default: m.ProcessSection })));
@@ -34,7 +36,9 @@ const Dim = ({ label, value }: { label: string; value: number }) => (
 export default function Landing() {
   useReveal();
   const navigate = useNavigate();
+  const { state, actions } = useApp();
   const [email, setEmail] = useState('');
+  const isAuthenticated = Boolean(state.user && sessionManager.getToken());
 
   return (
     <div id="site">
@@ -45,8 +49,28 @@ export default function Landing() {
             <a href="#process">How it works</a>
             <a href="#features">Features</a>
             <a href="#faq">FAQ</a>
-            <Link to="/login">Log in</Link>
-            <Link className="btn" to="/signup">Join free</Link>
+            {isAuthenticated ? (
+              <div className="row" style={{ alignItems: 'center', gap: 10 }}>
+                <Link className="btn xs" to={state.profile ? '/dash' : '/onb'}>
+                  Go to App ({state.user?.name || state.user?.email.split('@')[0]})
+                </Link>
+                <button
+                  type="button"
+                  className="btn o xs"
+                  onClick={() => {
+                    actions.logout();
+                    sessionManager.clear();
+                  }}
+                >
+                  Log out
+                </button>
+              </div>
+            ) : (
+              <>
+                <Link to="/login">Log in</Link>
+                <Link className="btn" to="/signup">Join free</Link>
+              </>
+            )}
           </nav>
         </div>
       </header>
@@ -67,7 +91,7 @@ export default function Landing() {
               <div className="row" style={{ justifyContent: 'space-between', alignItems: 'start' }}>
                 <div>
                   <h3 style={{ fontSize: '1.2rem' }}>Machine Learning Engineer</h3>
-                  <p className="meta">Nilecore AI · Cairo · Hybrid · 2 days ago</p>
+                  <p className="meta">AI Tech Systems · Cairo · Hybrid · 2 days ago</p>
                 </div>
                 <span className="badge s">Strong Fit</span>
               </div>

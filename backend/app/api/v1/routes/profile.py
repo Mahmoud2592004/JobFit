@@ -73,12 +73,28 @@ async def get_user_profile(
     summary="Update user profile",
     description="Update profile contact info and metadata.",
 )
+@router.put(
+    "",
+    response_model=UserProfileResponse,
+    summary="Update user profile",
+    description="Update profile contact info and metadata.",
+)
 async def update_user_profile(
     payload: UserProfileUpdate,
     current_user: CurrentUser,
     repo: ProfileRepository = Depends(get_profile_repo),
 ) -> dict[str, Any]:
     update_data = payload.model_dump(exclude_unset=True)
+    if "phone" in update_data and "contact_phone" not in update_data:
+        update_data["contact_phone"] = update_data.pop("phone")
+    else:
+        update_data.pop("phone", None)
+
+    if "linkedin" in update_data and "linkedin_url" not in update_data:
+        update_data["linkedin_url"] = update_data.pop("linkedin")
+    else:
+        update_data.pop("linkedin", None)
+
     years_exp = update_data.pop("years_experience", None)
 
     # Upsert standard profile contact details

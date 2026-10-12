@@ -169,3 +169,132 @@ def test_project_parsing_with_wrapped_lines_and_endash():
     assert "footprint from 6GB to 1.2GB" in (proj.description or "")
     assert "inference pipelines" in (proj.description or "")
 
+
+def test_leadership_certifications_and_multi_links_extraction():
+    parser = DeterministicResumeParser()
+    text = """
+    Alex Johnson
+    Email: alex.johnson@example.com | Phone: +1 202-555-0143 | Location: San Francisco, CA
+
+    Professional Summary:
+    AI engineer specializing in deep learning infrastructure and multi-agent systems.
+
+    Technical Skills:
+    Python, PyTorch, FastAPI, React, Docker, Kubernetes
+
+    Work Experience:
+    Machine Learning Engineer at NextGen AI (2022-01 to Present)
+    - Developed scalable vector search services with sub-50ms latency.
+
+    Leadership & Community:
+    Student Developer Network - Tech Chapter 2023 – 2024
+    Lead AI Organizer Alexandria, Egypt
+    –Spearheaded a 10-member team mentoring 100+ students in AI/ML and staging 6+ technical workshops.
+
+    Certifications & Credentials:
+    Machine Learning Specialization - DeepLearning.AI & Stanford University
+
+    Projects:
+    HackOps Platform | Python, Docker
+    - Built containerized competition runner.
+
+    Links:
+    https://www.linkedin.com/in/alex-johnson-ml
+    https://github.com/alexjohnson-dev
+    https://play.google.com/store/apps/details?id=com.example.mobileapp
+    https://apps.apple.com/app/medical-assistant/id123456789
+    https://github.com/alexjohnson-dev/HackOps
+    """
+    profile = parser.parse(text)
+
+    # 1. Contact links
+    assert profile.contact.linkedin_url == "https://www.linkedin.com/in/alex-johnson-ml"
+    assert profile.contact.github_url == "https://github.com/alexjohnson-dev"
+    assert len(profile.contact.links) >= 3
+    assert any("play.google.com" in l for l in profile.contact.links)
+    assert any("apps.apple.com" in l for l in profile.contact.links)
+
+    # 2. Leadership
+    assert len(profile.leadership) == 1
+    leader_entry = profile.leadership[0]
+    assert "Student Developer Network" in leader_entry.company
+    assert "Lead AI Organizer" in leader_entry.title
+    assert "Alexandria, Egypt" in (leader_entry.location or "")
+    assert len(leader_entry.achievements) == 1
+    assert "Spearheaded a 10-member team" in leader_entry.achievements[0]
+
+    # 3. Certifications (zero fake "Certification Authority" and zero URLs)
+    assert len(profile.certifications) == 1
+    cert = profile.certifications[0]
+    assert cert.name == "Machine Learning Specialization"
+    assert cert.issuer == "DeepLearning.AI & Stanford University"
+    assert cert.issuer != "Certification Authority"
+    # Ensure no URL was mistaken for a certification
+    assert not any("http" in c.name for c in profile.certifications)
+
+    # 4. Project URL association
+    assert len(profile.projects) == 1
+    proj = profile.projects[0]
+    assert proj.url is not None
+    assert "HackOps" in proj.url
+
+
+def test_user_reported_resume_structure():
+    parser = DeterministicResumeParser()
+    text = """
+    Mahmoud El Sherbiny
+    Email: mahmoud@example.com
+
+    Leadership & Community:
+    IEEE Computer Society - EJUST 2024 – 2025
+    Head of AI and ML Community Alexandria, Egypt
+    –Spearheaded a 10-member team mentoring 100+ students in AI/ML and staging 6+ technical workshops.
+
+    Certifications & Credentials:
+    Machine Learning Specialization - DeepLearning.AI & Harvard University
+
+    Projects:
+    HackOps Autonomous Agent
+    - Automated evaluation engine.
+
+    Links:
+    https://www.linkedin.com/in/mahmoud-el-sherbiny-m4
+    https://github.com/Mahmoud2592004
+    https://play.google.com/store/apps/details?id=com.meddigiverse.meddigig
+    https://apps.apple.com/app/atlas-doctors-pharmacists/id6805466076
+    https://github.com/Mahmoud2592004/HackOps
+    """
+    profile = parser.parse(text)
+
+    # Leadership
+    assert len(profile.leadership) == 1
+    lead = profile.leadership[0]
+    assert "IEEE Computer Society" in lead.company
+    assert "Head of AI and ML Community" in lead.title
+    assert "Alexandria, Egypt" in (lead.location or "")
+    assert len(lead.achievements) == 1
+    assert "10-member team" in lead.achievements[0]
+
+    # Certifications
+    assert len(profile.certifications) == 1
+    cert = profile.certifications[0]
+    assert cert.name == "Machine Learning Specialization"
+    assert cert.issuer == "DeepLearning.AI & Harvard University"
+    assert cert.issuer != "Certification Authority"
+    assert not any("Certification Authority" in (c.issuer or "") for c in profile.certifications)
+
+    # Links
+    assert profile.contact.linkedin_url == "https://www.linkedin.com/in/mahmoud-el-sherbiny-m4"
+    assert profile.contact.github_url == "https://github.com/Mahmoud2592004"
+    assert profile.contact.linkedin_url not in profile.contact.links
+    assert profile.contact.github_url not in profile.contact.links
+    assert any("play.google.com" in l for l in profile.contact.links)
+    assert any("apps.apple.com" in l for l in profile.contact.links)
+
+    # Project URL association
+    assert len(profile.projects) == 1
+    assert profile.projects[0].url is not None
+    assert "HackOps" in profile.projects[0].url
+
+
+

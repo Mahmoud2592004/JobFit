@@ -102,8 +102,20 @@ class JobRepository(BaseRepository):
                 builder = builder.eq("work_arrangement", "remote")
 
             # 2. Location Filter
+            loc_tokens: list[str] = []
             if location and location.strip() and location.lower() not in {"any", "worldwide", "all"}:
-                builder = builder.ilike("location", f"%{location.strip()}%")
+                loc_tokens = [
+                    t.strip()
+                    for t in location.split(",")
+                    if t.strip() and t.strip().lower() not in {"any", "worldwide", "all"}
+                ]
+
+            if loc_tokens:
+                if len(loc_tokens) == 1:
+                    builder = builder.ilike("location", f"%{loc_tokens[0]}%")
+                else:
+                    or_clause = ",".join([f"location.ilike.%{t}%" for t in loc_tokens])
+                    builder = builder.or_(or_clause)
 
             # 3. Employment Type Filter (e.g. Full-time, Part-time, Internship)
             if employment_type and employment_type.lower() != "any":
@@ -136,19 +148,32 @@ class JobRepository(BaseRepository):
             res = builder.execute()
             records = self.cast_records(res.data)
 
-            # If restrictive filters return 0 records, fallback gracefully to broader keywords
-            if not records and (location or work_arrangement or employment_type or seniority or date_posted):
+            # If restrictive secondary filters return 0 records, fallback gracefully to broader keywords
+            # BUT ALWAYS retain explicit location constraints so out-of-country jobs never leak
+            if not records and (work_arrangement or employment_type or seniority or date_posted):
                 fallback_builder = (
                     self.client.table("jobs")
                     .select("*")
                     .eq("is_expired", False)
                     .order("retrieved_at", desc=True)
                 )
+                if loc_tokens:
+                    if len(loc_tokens) == 1:
+                        fallback_builder = fallback_builder.ilike("location", f"%{loc_tokens[0]}%")
+                    else:
+                        fallback_builder = fallback_builder.or_(",".join([f"location.ilike.%{t}%" for t in loc_tokens]))
                 if query and query.strip():
                     fallback_builder = fallback_builder.ilike("title", f"%{query.strip()}%")
                 fallback_builder = fallback_builder.range(offset, offset + limit - 1)
                 fb_res = fallback_builder.execute()
                 records = self.cast_records(fb_res.data)
+
+            if loc_tokens and records:
+                records = [
+                    r
+                    for r in records
+                    if any(tok.lower() in (r.get("location") or "").lower() for tok in loc_tokens)
+                ]
 
             return records
         except Exception as exc:

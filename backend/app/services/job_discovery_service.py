@@ -85,32 +85,75 @@ class JobDiscoveryService:
             },
         }
 
-        # 1. Create audit record for the search run
-        search_run = await self.job_repo.create_search_run(
-            user_id=user_id,
-            profile_version_id=profile_version_id,
-            preferences_snapshot=preferences_snapshot,
-            providers_used=provider_names,
-        )
-        run_id = search_run.get("id")
+        # 1. Create audit record for the search run if valid user
+        run_id = None
+        if str(user_id) != "00000000-0000-0000-0000-000000000000":
+            try:
+                search_run = await self.job_repo.create_search_run(
+                    user_id=user_id,
+                    profile_version_id=profile_version_id,
+                    preferences_snapshot=preferences_snapshot,
+                    providers_used=provider_names,
+                )
+                if search_run:
+                    run_id = search_run.get("id")
+            except Exception as exc:
+                log.warning("could_not_create_search_run_audit", error=str(exc))
 
         try:
-            # 2. Fetch jobs concurrently from all providers with optimized preferences
-            tasks = [
-                provider.fetch_jobs(
-                    query=query,
-                    limit=limit_per_provider,
-                    preferences=active_prefs,
-                )
-                for provider in self.providers
+            # 2. Extract target locations for fair geographic distribution across selected countries
+            raw_locs = active_prefs.get("locations") or []
+            if isinstance(raw_locs, str):
+                target_locations = [l.strip() for l in raw_locs.split(",") if l.strip()]
+            elif isinstance(raw_locs, list):
+                target_locations = [str(l).strip() for l in raw_locs if str(l).strip()]
+            else:
+                target_locations = []
+
+            if not target_locations and active_prefs.get("location"):
+                target_locations = [l.strip() for l in str(active_prefs["location"]).split(",") if l.strip()]
+
+            target_locations = [
+                l for l in target_locations if l.lower() not in {"any", "worldwide", "all"}
             ]
+
+            # If user selected multiple countries, divide limit evenly across countries
+            tasks = []
+            if len(target_locations) > 1:
+                # Remove single country locking so Apify doesn't restrict all countries to one country code
+                active_prefs.pop("split_country", None)
+                active_prefs.pop("splitCountry", None)
+                num_locs = len(target_locations)
+                per_loc_limit = max(1, limit_per_provider // num_locs)
+                remainder = limit_per_provider % num_locs
+
+                for provider in self.providers:
+                    for idx, loc in enumerate(target_locations):
+                        loc_limit = per_loc_limit + (1 if idx < remainder else 0)
+                        loc_prefs = {**active_prefs, "location": loc, "locations": [loc]}
+                        tasks.append(
+                            provider.fetch_jobs(
+                                query=query,
+                                limit=loc_limit,
+                                preferences=loc_prefs,
+                            )
+                        )
+            else:
+                tasks = [
+                    provider.fetch_jobs(
+                        query=query,
+                        limit=limit_per_provider,
+                        preferences=active_prefs,
+                    )
+                    for provider in self.providers
+                ]
+
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             all_jobs: list[CanonicalJob] = []
-            for idx, res in enumerate(results):
-                p_name = self.providers[idx].name
+            for res in results:
                 if isinstance(res, Exception):
-                    log.error("provider_execution_error", provider=p_name, error=str(res))
+                    log.error("provider_execution_error", error=str(res))
                 elif isinstance(res, list):
                     all_jobs.extend(res)
 

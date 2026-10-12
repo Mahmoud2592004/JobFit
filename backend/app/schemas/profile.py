@@ -21,6 +21,8 @@ class ContactInfo(BaseModel):
     location: str | None = None
     linkedin_url: str | None = None
     portfolio_url: str | None = None
+    github_url: str | None = None
+    links: list[str] = Field(default_factory=list)
 
 
 class EmploymentEntry(BaseModel):
@@ -45,7 +47,7 @@ class EducationEntry(BaseModel):
 
 class CertificationEntry(BaseModel):
     name: str
-    issuer: str
+    issuer: str | None = None
     issue_date: str | None = None
     expiry_date: str | None = None
     credential_id: str | None = None
@@ -68,6 +70,7 @@ class ExtractedProfile(BaseModel):
     summary: str = ""
     skills: list[str] = Field(default_factory=list)
     employment_history: list[EmploymentEntry] = Field(default_factory=list)
+    leadership: list[EmploymentEntry] = Field(default_factory=list)
     education: list[EducationEntry] = Field(default_factory=list)
     certifications: list[CertificationEntry] = Field(default_factory=list)
     projects: list[ProjectEntry] = Field(default_factory=list)
@@ -83,9 +86,12 @@ class UserProfileUpdate(BaseModel):
     display_name: str | None = None
     contact_email: str | None = None
     contact_phone: str | None = None
+    phone: str | None = None
     location: str | None = None
     linkedin_url: str | None = None
+    linkedin: str | None = None
     portfolio_url: str | None = None
+    github_url: str | None = None
     years_experience: float | None = None
 
 
@@ -98,6 +104,7 @@ class UserProfileResponse(BaseModel):
     location: str | None = None
     linkedin_url: str | None = None
     portfolio_url: str | None = None
+    github_url: str | None = None
     years_experience: float | None = None
     created_at: datetime
     updated_at: datetime

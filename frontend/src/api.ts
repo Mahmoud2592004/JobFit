@@ -130,6 +130,9 @@ async function request<T>(
         } else {
           onTokenRefreshed(null);
           sessionManager.clear();
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('jobfit:auth-expired'));
+          }
         }
       } else {
         return new Promise((resolve) => {
@@ -271,6 +274,26 @@ export const api = {
     async get(jobId: string) {
       return request<any>(`/jobs/${jobId}`);
     },
+    async search(
+      query?: string,
+      location?: string,
+      date_posted?: 'past24Hours' | 'pastWeek' | 'pastMonth' | 'anyTime',
+      under_10_applicants?: boolean,
+      extra?: {
+        urls?: string[];
+        geo_id?: string;
+        distance?: number;
+        locations?: string[];
+        company_ids?: string[];
+        auto_convert_to_ai_search?: boolean;
+        scrape_company?: boolean;
+        split_by_location?: boolean;
+        split_country?: string;
+        limit_per_provider?: number;
+      },
+    ) {
+      return this.triggerDiscovery(query, location, date_posted, under_10_applicants, extra);
+    },
     async triggerDiscovery(
       query?: string,
       location?: string,
@@ -280,6 +303,7 @@ export const api = {
         urls?: string[];
         geo_id?: string;
         distance?: number;
+        locations?: string[];
         company_ids?: string[];
         auto_convert_to_ai_search?: boolean;
         scrape_company?: boolean;
@@ -293,6 +317,7 @@ export const api = {
         body: JSON.stringify({
           query: query || undefined,
           location: location || undefined,
+          locations: extra?.locations && extra.locations.length > 0 ? extra.locations : undefined,
           date_posted: date_posted || undefined,
           under_10_applicants: under_10_applicants || undefined,
           urls: extra?.urls && extra.urls.length > 0 ? extra.urls : undefined,
@@ -309,14 +334,15 @@ export const api = {
     },
     async aiFilter(
       query?: string,
-      min_fit: 'all' | 'valid_only' | 'strong_only' = 'valid_only',
-      limit = 15,
+      min_fit: 'all' | 'valid_only' | 'strong_only' = 'all',
+      limit = 30,
       filters?: {
         location?: string;
         work_arrangement?: string;
         date_posted?: 'anyTime' | 'past24Hours' | 'pastWeek' | 'pastMonth';
         experience_level?: string;
         employment_type?: string;
+        candidate_profile?: any;
       },
     ) {
       return request<import('./types').JobAIFilterResponse>('/jobs/ai-filter', {
@@ -330,6 +356,7 @@ export const api = {
           date_posted: filters?.date_posted || null,
           experience_level: filters?.experience_level || null,
           employment_type: filters?.employment_type || null,
+          candidate_profile: filters?.candidate_profile || null,
         }),
       });
     },

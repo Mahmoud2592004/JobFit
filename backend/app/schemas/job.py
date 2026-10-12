@@ -77,6 +77,10 @@ class JobSearchRequest(BaseModel):
     )
     remote_only: bool = Field(default=False, description="Filter for remote jobs only")
     location: str | None = Field(default=None, description="Target city, region, or country (e.g. 'Cairo, Egypt', 'London')")
+    locations: list[str] | None = Field(
+        default=None,
+        description="Optional list of target countries or regions to divide job search across",
+    )
     geo_id: str | None = Field(default=None, description="Optional LinkedIn geoId for precise location targeting")
     distance: int | None = Field(default=None, description="Search radius in miles around the location")
     date_posted: Literal["past24Hours", "pastWeek", "pastMonth", "anyTime"] | None = Field(
@@ -181,14 +185,18 @@ class JobAIFilterRequest(BaseModel):
         description="Employment type: 'Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', or 'Any'",
     )
     min_fit: Literal["all", "valid_only", "strong_only"] = Field(
-        default="valid_only",
+        default="all",
         description="Filter threshold: 'all', 'valid_only' (Strong + Potential), or 'strong_only'",
     )
     limit: int = Field(
-        default=20,
+        default=50,
         ge=1,
-        le=50,
+        le=100,
         description="Maximum job listings to evaluate and return",
+    )
+    candidate_profile: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional candidate background and preferences to enrich LLM evaluation",
     )
 
 

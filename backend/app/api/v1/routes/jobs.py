@@ -61,8 +61,8 @@ def get_ai_job_filter_service(
 )
 async def search_jobs(
     payload: JobSearchRequest,
-    user_id: Annotated[str, Depends(get_current_user)],
     discovery_service: Annotated[JobDiscoveryService, Depends(get_job_discovery_service)],
+    user_id: Annotated[str | None, Depends(get_optional_user)] = None,
 ) -> JobSearchResponse:
     """
     Search external job sources (LinkedIn via Apify, etc.) concurrently,
@@ -70,9 +70,15 @@ async def search_jobs(
     and log a user search run audit entry.
     """
     request_prefs: dict[str, Any] = {}
-    if payload.location:
+    if payload.locations:
+        clean_locs = [str(l).strip() for l in payload.locations if str(l).strip()]
+        request_prefs["locations"] = clean_locs
+        if clean_locs:
+            request_prefs["location"] = clean_locs[0]
+    elif payload.location:
+        loc_parts = [l.strip() for l in payload.location.split(",") if l.strip()]
+        request_prefs["locations"] = loc_parts
         request_prefs["location"] = payload.location
-        request_prefs["locations"] = [payload.location]
     if payload.urls:
         request_prefs["urls"] = payload.urls
     if payload.geo_id:
@@ -96,8 +102,9 @@ async def search_jobs(
     if payload.limit_per_provider:
         request_prefs["limit_per_source"] = payload.limit_per_provider
 
+    effective_uid = user_id or "00000000-0000-0000-0000-000000000000"
     result = await discovery_service.discover_jobs(
-        user_id=user_id,
+        user_id=effective_uid,
         query=payload.query or "",
         remote_only=payload.remote_only,
         limit_per_provider=payload.limit_per_provider,
@@ -114,15 +121,16 @@ async def search_jobs(
 )
 async def ai_filter_jobs(
     payload: JobAIFilterRequest,
-    user_id: Annotated[str, Depends(get_current_user)],
     ai_service: Annotated[AIJobFilterService, Depends(get_ai_job_filter_service)],
+    user_id: Annotated[str | None, Depends(get_optional_user)] = None,
 ) -> JobAIFilterResponse:
     """
     Rigorously evaluate candidate fit against job listings using Gemini.
     Incorporates candidate's verified years of experience and work preferences.
     """
+    effective_uid = user_id or "00000000-0000-0000-0000-000000000000"
     return await ai_service.filter_jobs_for_candidate(
-        user_id=user_id,
+        user_id=effective_uid,
         query=payload.query,
         location=payload.location,
         work_arrangement=payload.work_arrangement,
@@ -131,6 +139,7 @@ async def ai_filter_jobs(
         employment_type=payload.employment_type,
         min_fit=payload.min_fit,
         limit=payload.limit,
+        candidate_profile=payload.candidate_profile,
     )
 
 
@@ -143,6 +152,8 @@ async def list_jobs(
     repo: Annotated[JobRepository, Depends(get_job_repository)],
     _user_id: Annotated[str | None, Depends(get_optional_user)] = None,
     query: Annotated[str | None, Query(description="Filter by title or employer")] = None,
+    location: Annotated[str | None, Query(description="Filter by location")] = None,
+    work_arrangement: Annotated[str | None, Query(description="Filter by work arrangement")] = None,
     remote_only: Annotated[bool, Query(description="Filter remote-only listings")] = False,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -150,6 +161,8 @@ async def list_jobs(
     """Return paginated job listings from the catalog matching optional criteria."""
     records = await repo.list_jobs(
         query=query,
+        location=location,
+        work_arrangement=work_arrangement,
         remote_only=remote_only,
         limit=limit,
         offset=offset,

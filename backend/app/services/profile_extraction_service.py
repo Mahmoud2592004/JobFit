@@ -56,6 +56,7 @@ class ProfileExtractionService:
         """Merge deterministic extraction with LLM findings to maximize recall and precision."""
         merged_skills = sorted(set(det.skills + llm.skills))
 
+        all_links = list(dict.fromkeys(det.contact.links + llm.contact.links))
         contact = ContactInfo(
             name=det.contact.name or llm.contact.name,
             email=det.contact.email or llm.contact.email,
@@ -63,10 +64,13 @@ class ProfileExtractionService:
             location=det.contact.location or llm.contact.location,
             linkedin_url=det.contact.linkedin_url or llm.contact.linkedin_url,
             portfolio_url=det.contact.portfolio_url or llm.contact.portfolio_url,
+            github_url=det.contact.github_url or llm.contact.github_url,
+            links=all_links,
         )
 
         summary = llm.summary or det.summary
         employment = det.employment_history if det.employment_history else llm.employment_history
+        leadership = det.leadership if det.leadership else llm.leadership
         education = det.education if det.education else llm.education
         certs = det.certifications if det.certifications else llm.certifications
         projects = det.projects if det.projects else llm.projects
@@ -79,6 +83,7 @@ class ProfileExtractionService:
             summary=summary,
             skills=merged_skills if merged_skills else (det.skills or llm.skills),
             employment_history=employment,
+            leadership=leadership,
             education=education,
             certifications=certs,
             projects=projects,

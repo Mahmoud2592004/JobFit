@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react';
-import { jobById } from '../data/jobs';
-import { matchJob, today } from '../lib/match';
-import { sessionManager } from '../api';
-import type { AppState, Application, Prefs, Profile, Stage, TemplateId, TailoredResume, User } from '../types';
+import { jobById, registerJobs } from '../data/jobs';
+import { matchJob, today, extractSkills, inferSeniorityLevel } from '../lib/match';
+import { api, sessionManager } from '../api';
+import type { AppState, Application, Prefs, Profile, Stage, TemplateId, TailoredResume, User, Job, Mode, JobType, Level } from '../types';
 
 const KEY = 'jobfit:v1';
 const USER_KEY_PREFIX = 'jobfit:v1:user:';
@@ -12,12 +12,20 @@ export const getUserStorageKey = (email?: string | null): string | null =>
 
 export const DEFAULT_PREFS: Prefs = {
   titles: 'Machine Learning Engineer, NLP Engineer',
-  location: 'Cairo',
+  location: 'Cairo, Egypt',
+  countries: ['EG'],
   mode: 'Any',
   type: 'Any',
   level: 'Entry-level',
   requireMode: false,
   requireLocation: false,
+  urls: [],
+  datePosted: 'anyTime',
+  under10Applicants: false,
+  autoConvertToAiSearch: true,
+  scrapeCompany: true,
+  limitPerSource: 35,
+  splitByLocation: false,
 };
 
 const initial: AppState = {
@@ -43,7 +51,7 @@ function load(): AppState {
 
   try {
     const session = sessionManager.get();
-    if (session?.email) {
+    if (session?.email && session?.access_token) {
       const uKey = getUserStorageKey(session.email);
       const raw = uKey ? localStorage.getItem(uKey) : null;
       if (raw) {
@@ -81,7 +89,7 @@ export interface ApplicationPatch {
 
 export interface ResumePayload {
   resumeId: number | null;
-  jobId: number;
+  jobId: number | string;
   template: TemplateId;
   summary: string;
   skills: string;
@@ -94,8 +102,8 @@ type Action =
   | { type: 'logout' }
   | { type: 'profile'; profile: Profile | null }
   | { type: 'prefs'; prefs: Prefs }
-  | { type: 'save'; jobId: number }
-  | { type: 'dismiss'; jobId: number }
+  | { type: 'save'; jobId: number | string }
+  | { type: 'dismiss'; jobId: number | string }
   | { type: 'alertsSeen' }
   | { type: 'move'; id: number; stage: Stage }
   | { type: 'updateApplication'; id: number; patch: ApplicationPatch }
@@ -105,8 +113,8 @@ type Action =
   | { type: 'template'; template: TemplateId }
   | { type: 'deleteAccount' };
 
-function ensureApplication(state: AppState, jobId: number, stage: Stage): { state: AppState; app: Application } {
-  const found = state.applications.find((a) => a.jobId === jobId);
+function ensureApplication(state: AppState, jobId: number | string, stage: Stage): { state: AppState; app: Application } {
+  const found = state.applications.find((a) => String(a.jobId) === String(jobId));
   if (found) return { state, app: found };
   const job = jobById(jobId);
   const score = job && state.profile ? matchJob(job, state.profile, state.prefs).score : 0;
@@ -256,8 +264,8 @@ interface Actions {
   logout: () => void;
   saveProfile: (profile: Profile | null) => void;
   savePrefs: (prefs: Prefs) => void;
-  saveJob: (jobId: number) => void;
-  dismissJob: (jobId: number) => void;
+  saveJob: (jobId: number | string) => void;
+  dismissJob: (jobId: number | string) => void;
   markAlertsSeen: () => void;
   moveApplication: (id: number, stage: Stage) => void;
   updateApplication: (id: number, patch: ApplicationPatch) => void;
@@ -276,6 +284,40 @@ const AppContext = createContext<Ctx | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, load);
+
+  useEffect(() => {
+    const handleExpired = () => {
+      dispatch({ type: 'logout' });
+    };
+    window.addEventListener('jobfit:auth-expired', handleExpired);
+    return () => window.removeEventListener('jobfit:auth-expired', handleExpired);
+  }, []);
+
+  useEffect(() => {
+    // Load real scraped jobs from backend on initial app load and register them
+    api.jobs
+      .list({ limit: 100 })
+      .then((res) => {
+        if (res.data && res.data.length > 0) {
+          const mapped: Job[] = res.data.map((b: any, idx: number) => ({
+            id: b.id || idx + 1,
+            title: b.title,
+            company: b.employer,
+            location: b.location || 'Remote',
+            mode: (b.work_arrangement === 'remote' ? 'Remote' : b.work_arrangement === 'hybrid' ? 'Hybrid' : 'On-site') as Mode,
+            type: (b.employment_type === 'internship' ? 'Internship' : b.employment_type === 'part_time' ? 'Part-time' : 'Full-time') as JobType,
+            level: inferSeniorityLevel(b.seniority, b.title),
+            daysAgo: Math.max(1, Math.round((Date.now() - new Date(b.published_at || b.retrieved_at).getTime()) / 86400000)),
+            requirements: b.description ? extractSkills(b.description).split(', ').filter(Boolean) : ['Python', 'SQL'],
+            eligibility: `${b.work_arrangement || 'Flexible'} in ${b.location || 'Anywhere'}. Verified via ${b.source_name}.`,
+            source_url: b.canonical_url,
+            description: b.description,
+          }));
+          registerJobs(mapped);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (state.user?.email) {

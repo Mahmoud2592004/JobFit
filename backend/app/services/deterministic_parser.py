@@ -48,7 +48,15 @@ _SECTION_PATTERNS = {
         re.IGNORECASE,
     ),
     "certifications": re.compile(
-        r"^(?:certifications?|certificates?|licenses?|credentials?|accreditations?|leadership|extracurricular|activities|community|honors?\s*(?:&|\+)?\s*awards?|certifications?\s*(?:&|\+)?\s*(?:licenses?|training))\b",
+        r"^(?:certifications?|certificates?|licenses?|credentials?|accreditations?|courses?|training|professional\s+development|honors?\s*(?:&|\+)?\s*awards?|certifications?\s*(?:&|\+)?\s*(?:licenses?|training))\b",
+        re.IGNORECASE,
+    ),
+    "leadership": re.compile(
+        r"^(?:leadership(?:\s*(?:&|and|\/)\s*(?:community|extracurricular|volunteering|service))?|leadership(?:\s+activities|\s+experience|\s+roles?)?|extracurricular(?:\s+activities)?|community(?:\s+involvement|\s+service|\s+leadership)?|volunteer(?:ing|\s+experience|\s+work)?|student\s+activities)\b",
+        re.IGNORECASE,
+    ),
+    "links": re.compile(
+        r"^(?:links|hyperlinks|online\s+profiles|web\s+links)\b",
         re.IGNORECASE,
     ),
 }
@@ -76,6 +84,11 @@ _TITLE_ROLES = (
 # Combined regex matching job titles
 _TITLE_REGEX = re.compile(
     rf"\b(?:{_TITLE_SENIORITY}\s+)?(?:{_TITLE_DOMAINS}\s+)?{_TITLE_ROLES}\b",
+    re.IGNORECASE,
+)
+
+_ORG_INDICATORS = re.compile(
+    r"\b(society|network|club|community|association|foundation|institute|chapter|committee|organization|group|ieee|acm|gdsc)\b",
     re.IGNORECASE,
 )
 
@@ -143,7 +156,7 @@ class DeterministicResumeParser:
         sections = self._segment_sections(lines)
 
         # 2. Extract Contact Info
-        contact = self._extract_contact(sections.get("header", []), cleaned)
+        contact = self._extract_contact(sections.get("header", []), cleaned, sections.get("links", []))
 
         # 3. Extract Summary
         summary = self._extract_summary(sections.get("summary", []))
@@ -151,8 +164,9 @@ class DeterministicResumeParser:
         # 4. Extract Skills
         skills = self._extract_skills(sections.get("skills", []), cleaned)
 
-        # 5. Extract Employment History
+        # 5. Extract Employment History & Leadership
         employment = self._extract_employment(sections.get("experience", []))
+        leadership = self._extract_leadership(sections.get("leadership", []))
 
         # 6. Extract Education
         education = self._extract_education(sections.get("education", []))
@@ -161,7 +175,7 @@ class DeterministicResumeParser:
         certifications = self._extract_certifications(sections.get("certifications", []))
 
         # 8. Extract Projects
-        projects = self._extract_projects(sections.get("projects", []))
+        projects = self._extract_projects(sections.get("projects", []), contact.links)
 
         # 9. Determine Seniority, Years Experience, and Target Roles
         years_exp = self._compute_years_experience(employment, cleaned)
@@ -173,6 +187,7 @@ class DeterministicResumeParser:
             summary=summary,
             skills=skills,
             employment_history=employment,
+            leadership=leadership,
             education=education,
             certifications=certifications,
             projects=projects,
@@ -187,10 +202,12 @@ class DeterministicResumeParser:
             "header": [],
             "summary": [],
             "experience": [],
+            "leadership": [],
             "education": [],
             "skills": [],
             "projects": [],
             "certifications": [],
+            "links": [],
             "other": [],
         }
 
@@ -224,7 +241,9 @@ class DeterministicResumeParser:
 
         return None
 
-    def _extract_contact(self, header_lines: list[str], full_text: str) -> ContactInfo:
+    def _extract_contact(
+        self, header_lines: list[str], full_text: str, links_lines: list[str] | None = None
+    ) -> ContactInfo:
         """Extract name, email, phone, location, and social links."""
         contact = ContactInfo()
 
@@ -244,29 +263,66 @@ class DeterministicResumeParser:
             if len(candidate_phone.replace(" ", "").replace("-", "")) >= 7:
                 contact.phone = candidate_phone
 
-        # LinkedIn
-        li_match = re.search(
-            r"(?:https?://)?(?:[a-zA-Z0-9-]+\.)?linkedin\.com/(?:in/)?([A-Za-z0-9_-]+)",
-            full_text,
+        # Collect and classify all URLs from full text and links section
+        combined_text = full_text + ("\n" + "\n".join(links_lines) if links_lines else "")
+        url_matches = re.findall(
+            r"(?:https?://[^\s)\]>\"']+|(?<!@)\b(?:www\.)[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+(?:/[^\s)\]>\"']*)?|(?<!@)\b(?:github\.com|linkedin\.com)/[^\s)\]>\"']*)",
+            combined_text,
             re.IGNORECASE,
         )
-        if li_match:
-            contact.linkedin_url = f"https://linkedin.com/in/{li_match.group(1)}"
 
-        # Portfolio or GitHub
-        gh_match = re.search(
-            r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9_-]+)",
-            full_text,
-            re.IGNORECASE,
-        )
-        if gh_match:
-            contact.portfolio_url = f"https://github.com/{gh_match.group(1)}"
-        else:
-            pf_match = re.search(
-                r"\bhttps?://([A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:/[^\s]*)?)", full_text
-            )
-            if pf_match and "linkedin.com" not in pf_match.group(0):
-                contact.portfolio_url = pf_match.group(0)
+        all_discovered_links: list[str] = []
+        for raw_u in url_matches:
+            u = raw_u.rstrip(".,;:)>\"']").strip()
+            if not u:
+                continue
+            if not (u.startswith("http://") or u.startswith("https://")):
+                u = f"https://{u}"
+            if u not in all_discovered_links:
+                all_discovered_links.append(u)
+
+        # Categorize URLs
+        for u in all_discovered_links:
+            u_lower = u.lower()
+            if "linkedin.com" in u_lower and not contact.linkedin_url:
+                contact.linkedin_url = u
+            elif "github.com" in u_lower:
+                gh_path = re.sub(r"^https?://(?:www\.)?github\.com/", "", u).strip("/")
+                parts = gh_path.split("/")
+                if len(parts) == 1 and parts[0] and not contact.github_url:
+                    contact.github_url = u
+                elif not contact.github_url and not any("/" in p for p in parts):
+                    contact.github_url = u
+            elif not contact.portfolio_url and not any(
+                bad in u_lower for bad in ("linkedin.com", "github.com", "play.google.com", "apps.apple.com")
+            ):
+                contact.portfolio_url = u
+
+        # Store additional links in contact.links, excluding LinkedIn and GitHub user profiles
+        def _is_linkedin_or_github_profile(u_str: str) -> bool:
+            u_low = u_str.lower()
+            if "linkedin.com" in u_low:
+                return True
+            if "github.com" in u_low:
+                gh_p = re.sub(r"^https?://(?:www\.)?github\.com/", "", u_low).strip("/")
+                parts = [p for p in gh_p.split("/") if p]
+                if len(parts) <= 1:
+                    return True
+                if contact.github_url and contact.github_url.lower().rstrip("/") == u_str.lower().rstrip("/"):
+                    return True
+            return False
+
+        contact.links = [
+            u
+            for u in all_discovered_links
+            if u != contact.linkedin_url and u != contact.github_url and not _is_linkedin_or_github_profile(u)
+        ]
+
+        # Fallback for portfolio if not set
+        if not contact.portfolio_url:
+            for u in contact.links:
+                contact.portfolio_url = u
+                break
 
         # Location: Check header lines with pipe delimiter first, then label, then city/country
         for hl in header_lines:
@@ -305,6 +361,8 @@ class DeterministicResumeParser:
                 and "@" not in line_clean
                 and not re.search(r"\d{3}", line_clean)
                 and "http" not in line_clean
+                and "github.com" not in line_clean
+                and "linkedin.com" not in line_clean
                 and len(line_clean.split()) <= 4
             ):
                 contact.name = line_clean
@@ -571,32 +629,243 @@ class DeterministicResumeParser:
         return entries
 
     def _extract_certifications(self, cert_lines: list[str]) -> list[CertificationEntry]:
-        """Extract certifications and issuers."""
+        """Extract certifications and issuers without injecting placeholder issuers or URLs."""
         certs: list[CertificationEntry] = []
         for line in cert_lines:
-            clean = line.lstrip("-*•▪ ").strip()
+            clean = line.lstrip("-*•▪–—·0123456789. ").strip()
             if not clean:
                 continue
 
+            # Skip URL lines, link headings, or email addresses
+            if (
+                re.search(r"https?://|www\.|github\.com|linkedin\.com", clean, re.IGNORECASE)
+                or clean.lower().startswith("links:")
+                or "@" in clean
+            ):
+                continue
+
             name = clean
-            issuer = "Certification Authority"
-            if " - " in clean:
-                parts = clean.split(" - ", 1)
+            issuer: str | None = None
+            issue_date: str | None = None
+
+            # Detect year (e.g. 2024, May 2023, or 2022)
+            date_match = re.search(
+                r"\b((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?20\d{2}|19\d{2})\b",
+                clean,
+                re.IGNORECASE,
+            )
+            if date_match:
+                issue_date = date_match.group(0).strip()
+                clean_no_date = (
+                    clean[: date_match.start()].strip(" -–—|(),")
+                    + " "
+                    + clean[date_match.end() :].strip(" -–—|(),")
+                )
+                clean = clean_no_date.strip()
+
+            if " - " in clean or " – " in clean or " — " in clean:
+                sep = " — " if " — " in clean else (" – " if " – " in clean else " - ")
+                parts = clean.split(sep, 1)
                 name, issuer = parts[0].strip(), parts[1].strip()
             elif " by " in clean:
                 parts = clean.split(" by ", 1)
+                name, issuer = parts[0].strip(), parts[1].strip()
+            elif " from " in clean:
+                parts = clean.split(" from ", 1)
+                name, issuer = parts[0].strip(), parts[1].strip()
+            elif " | " in clean:
+                parts = clean.split(" | ", 1)
                 name, issuer = parts[0].strip(), parts[1].strip()
             elif "(" in clean and ")" in clean:
                 issuer_match = re.search(r"\(([^)]+)\)", clean)
                 if issuer_match:
                     issuer = issuer_match.group(1).strip()
-                    name = clean[:clean.find("(")].strip()
+                    name = clean[: clean.find("(")].strip()
 
-            certs.append(CertificationEntry(name=name, issuer=issuer))
+            name = name.strip(" -–—|,")
+            if issuer:
+                issuer = issuer.strip(" -–—|,")
+
+            if name:
+                certs.append(CertificationEntry(name=name, issuer=issuer, issue_date=issue_date))
 
         return certs
 
-    def _extract_projects(self, proj_lines: list[str]) -> list[ProjectEntry]:
+    def _extract_leadership(self, leadership_lines: list[str]) -> list[EmploymentEntry]:
+        """
+        Extract leadership, community, and extracurricular roles into structured EmploymentEntries.
+        Robustly parses organization, role/title, dates, location, and achievements.
+        """
+        entries: list[EmploymentEntry] = []
+        current: dict[str, Any] | None = None
+        bullet_prefixes = ("-", "*", "•", "▪", "–", "—", "·", "●", "○", "◦", "⁃", "‣")
+
+        date_pattern = re.compile(
+            r"\b((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4})\s*[-–—to]+\s*((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?(?:\d{4}|present|current|now))\b",
+            re.IGNORECASE,
+        )
+
+        for line in leadership_lines:
+            clean = line.strip()
+            if not clean:
+                continue
+
+            # Skip URL lines or link headings
+            if (
+                re.search(r"https?://|www\.|github\.com|linkedin\.com", clean, re.IGNORECASE)
+                or clean.lower().startswith("links:")
+            ):
+                continue
+
+            is_bullet = clean.startswith(bullet_prefixes)
+            d_match = date_pattern.search(clean)
+
+            if d_match and not is_bullet:
+                if current and (current.get("company") or current.get("title")):
+                    entries.append(EmploymentEntry(**current))
+
+                start_date = d_match.group(1).strip()
+                end_date = d_match.group(2).strip()
+                is_current = any(k in end_date.lower() for k in ("present", "current", "now"))
+
+                without_date = date_pattern.sub("", clean).strip(" -–—|()[],")
+                title = ""
+                company = without_date or "Community Organization"
+
+                if " at " in without_date:
+                    parts_at = without_date.split(" at ", 1)
+                    title, company = parts_at[0].strip(), parts_at[1].strip()
+                elif " - " in without_date or " – " in without_date or " | " in without_date:
+                    split_s = " – " if " – " in without_date else (" - " if " - " in without_date else " | ")
+                    parts = without_date.split(split_s, 1)
+                    p0, p1 = parts[0].strip(), parts[1].strip()
+                    if bool(_TITLE_REGEX.search(p0)) and not bool(_ORG_INDICATORS.search(p0)):
+                        title, company = p0, p1
+                    elif bool(_TITLE_REGEX.search(p1)) and not bool(_ORG_INDICATORS.search(p1)):
+                        title, company = p1, p0
+                    else:
+                        company = without_date
+                        title = ""
+
+                current = {
+                    "company": company or "Community Organization",
+                    "title": title,
+                    "location": None,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "is_current": is_current,
+                    "description": "",
+                    "achievements": [],
+                }
+                continue
+
+            # If current entry is missing title, next non-bullet line can be Title or Title + Location
+            if current and not is_bullet and not current.get("title"):
+                title_part, loc_part = self._split_title_and_location(clean)
+                current["title"] = title_part
+                if loc_part:
+                    current["location"] = loc_part
+                continue
+
+            # If current entry exists and line is non-bullet, check if it contains location or standalone title
+            if current and not is_bullet and not current.get("location"):
+                _, loc_part = self._split_title_and_location(clean)
+                if loc_part and len(clean.replace(loc_part, "").strip()) == 0:
+                    current["location"] = loc_part
+                    continue
+
+            # If line is bullet point
+            if is_bullet:
+                b_text = clean.lstrip("–-—*•▪·●○◦⁃‣0123456789. ").strip()
+                if not current:
+                    current = {
+                        "company": "Community Organization",
+                        "title": "Leadership Role",
+                        "location": None,
+                        "start_date": None,
+                        "end_date": None,
+                        "is_current": False,
+                        "description": "",
+                        "achievements": [],
+                    }
+                if b_text:
+                    current["achievements"].append(b_text)
+                continue
+
+            # Non-bullet line without date when no current entry
+            if not current:
+                current = {
+                    "company": clean,
+                    "title": "",
+                    "location": None,
+                    "start_date": None,
+                    "end_date": None,
+                    "is_current": False,
+                    "description": "",
+                    "achievements": [],
+                }
+            elif current["achievements"]:
+                current["achievements"][-1] += " " + clean
+            else:
+                if not current["description"]:
+                    current["description"] = clean
+                else:
+                    current["description"] += " " + clean
+
+        if current and (current.get("company") or current.get("title")):
+            if not current.get("title"):
+                current["title"] = "Leadership Role"
+            entries.append(EmploymentEntry(**current))
+
+        return entries
+
+    def _split_title_and_location(self, clean: str) -> tuple[str, str | None]:
+        """
+        Split a line like 'Lead AI Organizer Alexandria, Egypt' or
+        'Head of AI and ML Community | Alexandria, Egypt' into (title, location).
+        """
+        # 1. Delimiter: | or · or -
+        for sep in (" | ", " · ", " - ", " – "):
+            if sep in clean:
+                parts = clean.split(sep, 1)
+                if re.search(r"\b[A-Za-z\s]+,\s*[A-Za-z]+|Remote|Hybrid|On-site", parts[1], re.IGNORECASE):
+                    return parts[0].strip(), parts[1].strip()
+
+        # 2. Comma-separated location at end of line: [City], [State/Country]
+        loc_match = re.search(
+            r"\b([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+)?),\s*([A-Z][a-zA-Z]+|[A-Z]{2})\s*$",
+            clean,
+        )
+        if loc_match:
+            city = loc_match.group(1).strip()
+            country_or_state = loc_match.group(2).strip()
+            city_words = city.split()
+            role_keywords = {
+                "lead", "head", "director", "organizer", "manager", "president", "chair",
+                "coordinator", "officer", "mentor", "member", "founder", "advisor", "community",
+                "developer", "engineer", "scientist", "analyst", "intern"
+            }
+            if len(city_words) > 1 and city_words[0].lower() in role_keywords:
+                city = city_words[-1]
+
+            location_str = f"{city}, {country_or_state}"
+            loc_start = clean.rfind(city)
+            if loc_start > 0:
+                title = clean[:loc_start].strip(" -–—|·,")
+                return title, location_str
+
+        # 3. Mode keyword at end
+        mode_match = re.search(r"\b(Remote|Hybrid|On-site)\s*$", clean, re.IGNORECASE)
+        if mode_match:
+            mode = mode_match.group(1).strip()
+            title = clean[: mode_match.start()].strip(" -–—|·,")
+            return title, mode
+
+        return clean, None
+
+    def _extract_projects(
+        self, proj_lines: list[str], available_links: list[str] | None = None
+    ) -> list[ProjectEntry]:
         """Extract personal and technical projects with robust multi-line bullet support."""
         projects: list[ProjectEntry] = []
         current: dict[str, Any] | None = None
@@ -606,6 +875,10 @@ class DeterministicResumeParser:
             clean = line.strip()
             if not clean:
                 continue
+
+            # Check if line contains an explicit URL
+            url_match = re.search(r"https?://[^\s)\]>\"']+", clean)
+            line_url = url_match.group(0).rstrip(".,;:)>\"']") if url_match else None
 
             is_bullet = clean.startswith(bullet_prefixes)
             ends_with_sentence_punct = clean.endswith((".", ",", ";", ":"))
@@ -621,6 +894,7 @@ class DeterministicResumeParser:
                 not is_bullet
                 and starts_with_upper
                 and not ends_with_sentence_punct
+                and not line.startswith("http")
                 and (
                     word_count <= 8
                     or ("|" in clean and word_count <= 14)
@@ -650,10 +924,13 @@ class DeterministicResumeParser:
                 current = {
                     "name": p_name,
                     "description": "",
-                    "url": None,
+                    "url": line_url,
                     "technologies": techs,
                 }
             elif current:
+                if line_url and not current.get("url"):
+                    current["url"] = line_url
+
                 desc_line = clean.lstrip("-*•▪–—·●○◦⁃‣ ").strip()
                 if is_bullet:
                     if not current["description"]:
@@ -668,23 +945,46 @@ class DeterministicResumeParser:
                         current["description"] += " " + desc_line
             else:
                 # Text before any recognized title
-                if not is_bullet and not ends_with_sentence_punct:
+                if not is_bullet and not ends_with_sentence_punct and not line.startswith("http"):
                     current = {
                         "name": clean.lstrip("-*•▪–—·●○◦⁃‣ ").strip(),
                         "description": "",
-                        "url": None,
+                        "url": line_url,
                         "technologies": [],
                     }
                 else:
                     current = {
                         "name": "Technical Project",
                         "description": "• " + clean.lstrip("-*•▪–—·●○◦⁃‣ ").strip() if is_bullet else clean,
-                        "url": None,
+                        "url": line_url,
                         "technologies": [],
                     }
 
         if current and (current.get("name") or current.get("description")):
             projects.append(ProjectEntry(**current))
+
+        # Associate project links if available
+        if available_links:
+            for proj in projects:
+                if not proj.url:
+                    p_slug = re.sub(r"[^a-z0-9]", "", proj.name.lower())
+                    proj_tokens = [
+                        t.lower()
+                        for t in re.findall(r"[A-Za-z0-9]+", proj.name)
+                        if len(t) >= 4 and t.lower() not in {"platform", "system", "project", "application", "tool", "service"}
+                    ]
+                    for u in available_links:
+                        u_lower = u.lower()
+                        # Check last path segment (e.g. repo name or app id)
+                        path_segments = [s for s in u_lower.split("/") if s and not s.startswith("http")]
+                        last_segment = re.sub(r"[^a-z0-9]", "", path_segments[-1] if path_segments else "")
+                        if last_segment and len(last_segment) >= 3 and last_segment in p_slug:
+                            proj.url = u
+                            break
+                        # Check if distinct project token appears in the URL
+                        if proj_tokens and any(token in u_lower for token in proj_tokens):
+                            proj.url = u
+                            break
 
         return projects
 

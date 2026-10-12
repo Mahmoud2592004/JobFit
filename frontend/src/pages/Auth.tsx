@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/Logo';
 import { useApp } from '../store/AppContext';
-import { api } from '../api';
+import { api, sessionManager } from '../api';
 import { formatBackendProfileToState } from '../lib/resumeParser';
 
 export default function Auth({ mode }: { mode: 'login' | 'signup' }) {
@@ -10,14 +10,44 @@ export default function Auth({ mode }: { mode: 'login' | 'signup' }) {
   const { state, actions } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
-  const prefill = (location.state as { email?: string } | null)?.email ?? '';
+  const navState = location.state as { email?: string; msg?: string } | null;
+  const prefill = navState?.email ?? '';
   const [name, setName] = useState('');
   const [email, setEmail] = useState(prefill);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(
+    navState?.msg ? { text: navState.msg, error: true } : null,
+  );
 
-  if (state.user) return <Navigate to={state.profile ? '/dash' : '/onb'} replace />;
+  if (state.user && sessionManager.getToken()) {
+    return (
+      <div className="au">
+        <Logo />
+        <div className="card">
+          <h3>Already signed in</h3>
+          <p className="meta" style={{ margin: '8px 0 16px' }}>
+            You are currently signed in as <strong>{state.user.email}</strong>.
+          </p>
+          <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+            <Link className="btn" to={state.profile ? '/dash' : '/onb'}>
+              Continue to {state.profile ? 'Dashboard' : 'Resume upload'}
+            </Link>
+            <button
+              type="button"
+              className="btn o"
+              onClick={() => {
+                actions.logout();
+                sessionManager.clear();
+              }}
+            >
+              Sign out / Use another account
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -60,13 +90,17 @@ export default function Auth({ mode }: { mode: 'login' | 'signup' }) {
               summary: formatted.summary || '',
               skills: formatted.skills || '',
               experience: formatted.experience || '',
+              leadership: formatted.leadership || '',
               education: formatted.education || '',
               projects: formatted.projects || '',
               certs: formatted.certs || '',
+              github: formatted.github || '',
+              other_links: formatted.other_links || [],
               confirmed: {
                 summary: true,
                 skills: true,
                 experience: true,
+                leadership: !!formatted.leadership,
                 education: true,
                 projects: true,
                 certs: true,

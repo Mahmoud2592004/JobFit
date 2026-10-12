@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { EditableList, EditableText } from '../components/Editable';
+import { EditableText } from '../components/Editable';
 import { jobById } from '../data/jobs';
 import { auditSkills, buildLetter, genProposal, matchJob, toLatex } from '../lib/match';
+import {
+  extractItemLinks,
+  parseEducationToCards,
+  parseExperienceToCards,
+  parseLeadershipToCards,
+  parseProjectsToCards,
+} from '../lib/resumeParser';
 import { useApp } from '../store/AppContext';
 import type { Draft, Job, Profile, TailoredResume, TemplateId } from '../types';
 
@@ -55,6 +62,7 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
   const [showTex, setShowTex] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [isEditingExp, setIsEditingExp] = useState(false);
   const timer = useRef<number>();
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -104,8 +112,47 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
   };
 
   const pickTemplate = (t: TemplateId) => setTemplate(t);
-  const contact = [profile.location, profile.phone, profile.email, profile.link].filter(Boolean).join(' | ');
-  const ellipsis = (s: string) => s.replace(/\n/g, ' / ').slice(0, 110);
+
+  const dedupeSkills = (str: string) => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const s of (str || '').split(',')) {
+      const t = s.trim();
+      if (!t) continue;
+      const low = t.toLowerCase();
+      if (!seen.has(low)) {
+        seen.add(low);
+        out.push(t);
+      }
+    }
+    return out.join(', ');
+  };
+
+  const contactRow1: React.ReactNode[] = [];
+  if (profile.location) contactRow1.push(<span key="loc">{profile.location}</span>);
+  if (profile.phone) contactRow1.push(<span key="ph">{profile.phone}</span>);
+  if (profile.email) contactRow1.push(<a key="em" href={`mailto:${profile.email}`}>{profile.email}</a>);
+
+  const contactRow2: React.ReactNode[] = [];
+  if (profile.link) {
+    const liHref = profile.link.startsWith('http') ? profile.link : `https://${profile.link}`;
+    contactRow2.push(
+      <a key="li" href={liHref} target="_blank" rel="noreferrer" className="ct-link">
+        LinkedIn
+      </a>
+    );
+  }
+  if (profile.github) {
+    const ghHref = profile.github.startsWith('http') ? profile.github : `https://${profile.github}`;
+    contactRow2.push(
+      <a key="gh" href={ghHref} target="_blank" rel="noreferrer" className="ct-link">
+        GitHub
+      </a>
+    );
+  }
+
+  const ellipsis = (s?: string) => (s || '').replace(/\n/g, ' / ').slice(0, 110);
+  const leadershipText = cur.leadership || profile.leadership || '';
 
   return (
     <>
@@ -186,20 +233,300 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
         <div>
           <div className={`paper t-${template}`} id="rdoc">
             <h2>{profile.name}</h2>
-            <div className="ct">{contact}</div>
+            <div className="ct">
+              {contactRow1.length > 0 && (
+                <div className="ct-row">
+                  {contactRow1.map((item, idx) => (
+                    <span key={idx}>
+                      {idx > 0 && '  |  '}
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {contactRow2.length > 0 && (
+                <div className="ct-row ct-links-row">
+                  {contactRow2.map((item, idx) => (
+                    <span key={idx}>
+                      {idx > 0 && '  |  '}
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             {tab === 'letter' ? (
               <EditableText key={seed.version} label="Cover letter" initial={seed.letter} resetKey={seed.version} onText={onLetter} style={{ marginTop: 22 }} />
             ) : (
               <>
-                <h4>Summary</h4>
-                <EditableText label="Summary" initial={seed.draft.summary} resetKey={seed.version} onText={onSummary} />
-                <h4>Skills</h4>
-                <EditableText label="Skills" initial={seed.draft.skills} resetKey={seed.version} onText={onSkills} />
-                <h4>Experience</h4>
-                <EditableList label="Experience" initial={seed.draft.experience} resetKey={seed.version} onText={onExperience} />
-                {profile.education && <><h4>Education</h4><div>{profile.education}</div></>}
-                {profile.projects && <><h4>Projects</h4><div>{profile.projects}</div></>}
-                {profile.certs && <><h4>Certifications</h4><div>{profile.certs}</div></>}
+                {seed.draft.summary && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Summary</h4>
+                    </div>
+                    <div className="summary-content">
+                      <EditableText label="Summary" initial={seed.draft.summary} resetKey={seed.version} onText={onSummary} />
+                    </div>
+                  </div>
+                )}
+
+                {seed.draft.skills && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Skills</h4>
+                    </div>
+                    <div className="skills-content">
+                      <EditableText label="Skills" initial={dedupeSkills(seed.draft.skills)} resetKey={seed.version} onText={onSkills} />
+                    </div>
+                  </div>
+                )}
+
+                {seed.draft.experience && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Experience</h4>
+                      <button
+                        type="button"
+                        className="section-edit-btn no-print"
+                        onClick={() => setIsEditingExp(!isEditingExp)}
+                      >
+                        {isEditingExp ? '✓ Preview' : '✎ Edit text'}
+                      </button>
+                    </div>
+                    {isEditingExp ? (
+                      <EditableText label="Experience" initial={seed.draft.experience} resetKey={seed.version} onText={onExperience} />
+                    ) : (
+                      parseExperienceToCards(seed.draft.experience).map((item, idx) => (
+                        <div className="resume-entry" key={idx}>
+                          <div className="entry-header">
+                            <div className="entry-left">
+                              <span className="entry-title">{item.title}</span>
+                              {item.company && (
+                                <span className="entry-company">
+                                  {' · '}{item.company}
+                                  {item.links && item.links.length > 0 && (
+                                    <span className="entry-item-links">
+                                      {' ('}
+                                      {item.links.map((link, lidx) => (
+                                        <span key={lidx}>
+                                          {lidx > 0 && ' | '}
+                                          <a href={link.url.startsWith('http') ? link.url : `https://${link.url}`} target="_blank" rel="noreferrer">
+                                            {link.label}
+                                          </a>
+                                        </span>
+                                      ))}
+                                      {')'}
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                            </div>
+                            {[item.startDate, item.endDate].filter(Boolean).length > 0 && (
+                              <span className="entry-date">{[item.startDate, item.endDate].filter(Boolean).join(' – ')}</span>
+                            )}
+                          </div>
+                          {(item.location || item.mode) && (
+                            <div className="entry-sub">
+                              <span>{[item.location, item.mode].filter(Boolean).join(' · ')}</span>
+                            </div>
+                          )}
+                          {item.bullets.length > 0 && (
+                            <ul className="entry-bullets">
+                              {item.bullets.map((b, bi) => (
+                                <li key={bi}>{b.replace(/^[-•*▪·–—\d.)\s]+/, '').trim()}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {leadershipText && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Leadership & Community</h4>
+                    </div>
+                    {parseLeadershipToCards(leadershipText).map((item, idx) => (
+                      <div className="resume-entry" key={idx}>
+                        <div className="entry-header">
+                          <div className="entry-left">
+                            <span className="entry-title">{item.title}</span>
+                            {item.organization && (
+                              <span className="entry-company">
+                                {' · '}{item.organization}
+                                {item.links && item.links.length > 0 && (
+                                  <span className="entry-item-links">
+                                    {' ('}
+                                    {item.links.map((link, lidx) => (
+                                      <span key={lidx}>
+                                        {lidx > 0 && ' | '}
+                                        <a href={link.url.startsWith('http') ? link.url : `https://${link.url}`} target="_blank" rel="noreferrer">
+                                          {link.label}
+                                        </a>
+                                      </span>
+                                    ))}
+                                    {')'}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                          {[item.startDate, item.endDate].filter(Boolean).length > 0 && (
+                            <span className="entry-date">{[item.startDate, item.endDate].filter(Boolean).join(' – ')}</span>
+                          )}
+                        </div>
+                        {item.location && (
+                          <div className="entry-sub">
+                            <span>{item.location}</span>
+                          </div>
+                        )}
+                        {item.bullets.length > 0 && (
+                          <ul className="entry-bullets">
+                            {item.bullets.map((b, bi) => (
+                              <li key={bi}>{b.replace(/^[-•*▪·–—\d.)\s]+/, '').trim()}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {profile.education && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Education</h4>
+                    </div>
+                    {parseEducationToCards(profile.education).map((item, idx) => (
+                      <div className="resume-entry" key={idx}>
+                        <div className="entry-header">
+                          <div className="entry-left">
+                            <span className="entry-title">{item.degree}</span>
+                            {item.institution && (
+                              <span className="entry-company">
+                                {' · '}{item.institution}
+                                {item.links && item.links.length > 0 && (
+                                  <span className="entry-item-links">
+                                    {' ('}
+                                    {item.links.map((link, lidx) => (
+                                      <span key={lidx}>
+                                        {lidx > 0 && ' | '}
+                                        <a href={link.url.startsWith('http') ? link.url : `https://${link.url}`} target="_blank" rel="noreferrer">
+                                          {link.label}
+                                        </a>
+                                      </span>
+                                    ))}
+                                    {')'}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                          {[item.startDate, item.endDate].filter(Boolean).length > 0 && (
+                            <span className="entry-date">{[item.startDate, item.endDate].filter(Boolean).join(' – ')}</span>
+                          )}
+                        </div>
+                        {(item.location || item.gpa) && (
+                          <div className="entry-sub">
+                            <span>{[item.location, item.gpa ? `GPA: ${item.gpa}` : ''].filter(Boolean).join(' · ')}</span>
+                          </div>
+                        )}
+                        {item.bullets.length > 0 && (
+                          <ul className="entry-bullets">
+                            {item.bullets.map((b, bi) => (
+                              <li key={bi}>{b.replace(/^[-•*▪·–—\d.)\s]+/, '').trim()}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {profile.projects && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Projects</h4>
+                    </div>
+                    {parseProjectsToCards(profile.projects).map((item, idx) => (
+                      <div className="resume-entry" key={idx}>
+                        <div className="entry-header">
+                          <div className="entry-left">
+                            <span className="entry-title">{item.title}</span>
+                            {item.links && item.links.length > 0 ? (
+                              <span className="entry-item-links">
+                                {' ('}
+                                {item.links.map((link, lidx) => (
+                                  <span key={lidx}>
+                                    {lidx > 0 && ' | '}
+                                    <a href={link.url.startsWith('http') ? link.url : `https://${link.url}`} target="_blank" rel="noreferrer">
+                                      {link.label}
+                                    </a>
+                                  </span>
+                                ))}
+                                {')'}
+                              </span>
+                            ) : item.link ? (
+                              <span className="entry-link"> · {item.link}</span>
+                            ) : null}
+                            {item.technologies && <span className="entry-tech"> [{item.technologies}]</span>}
+                          </div>
+                          {item.date && <span className="entry-date">{item.date}</span>}
+                        </div>
+                        {item.roleOrSubtitle && (
+                          <div className="entry-sub">
+                            <span>{item.roleOrSubtitle}</span>
+                          </div>
+                        )}
+                        {item.bullets.length > 0 && (
+                          <ul className="entry-bullets">
+                            {item.bullets.map((b, bi) => (
+                              <li key={bi}>{b.replace(/^[-•*▪·–—\d.)\s]+/, '').trim()}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {profile.certs && (
+                  <div className="resume-section">
+                    <div className="resume-section-header">
+                      <h4>Certifications</h4>
+                    </div>
+                    <ul className="entry-bullets">
+                      {profile.certs
+                        .split('\n')
+                        .map((c) => c.replace(/^[-•*▪·–—\d.)\s]+/, '').replace(/\s*-\s*Certification Authority/gi, '').trim())
+                        .filter((c) => c && !/^https?:\/\//i.test(c) && !/^links:?$/i.test(c))
+                        .map((c, idx) => {
+                          const { cleanText, links } = extractItemLinks(c);
+                          return (
+                            <li key={idx}>
+                              <span>{cleanText}</span>
+                              {links.length > 0 && (
+                                <span className="entry-item-links">
+                                  {' ('}
+                                  {links.map((link, lidx) => (
+                                    <span key={lidx}>
+                                      {lidx > 0 && ' | '}
+                                      <a href={link.url.startsWith('http') ? link.url : `https://${link.url}`} target="_blank" rel="noreferrer">
+                                        {link.label}
+                                      </a>
+                                    </span>
+                                  ))}
+                                  {')'}
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                    </ul>
+                  </div>
+                )}
               </>
             )}
           </div>
