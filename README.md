@@ -42,7 +42,7 @@ Applying for jobs in technical sectors is broken. Candidates spend hours tailori
 JobFit solves this by creating a closed-loop copilot:
 1. **Live Discovery**: Pulls authentic LinkedIn listings through optimized Apify scraper pipelines.
 2. **Transparent Scoring**: Evaluates candidate fit across technical overlap, seniority, and work preferences using Gemini Flash, complete with recruiter rationales.
-3. **Factual Tailoring**: Aligns resume bullets to target roles while enforcing a strict zero-hallucination ClaimVerifier that blocks unverified claims.
+3. **Factual Tailoring & AI Cover Letters**: Aligns resume bullets to target roles with zero-hallucination verification, and generates authentic, company-researched cover letters without robotic boilerplate.
 4. **Publishing-Grade Typography**: Renders ATS-scannable documents conforming to LaTeX typography standards in both browser preview and downloadable PDFs.
 
 ---
@@ -51,6 +51,7 @@ JobFit solves this by creating a closed-loop copilot:
 
 - **Deterministic Resume Parser**: Replaces unreliable LLM-based extraction with a deterministic state machine that accurately splits sections, extracts contact details (including international prefixes and regional LinkedIn subdomains), and parses multi-line employment entries.
 - **Anti-Hallucination ClaimVerifier**: Every tailored bullet is cross-referenced against the candidate's verified profile evidence. If a skill, employer, or metric cannot be grounded in source data, it is flagged and blocked until cleared.
+- **Company-Researched AI Cover Letters**: Drafts authentic, deeply personalized cover letters with Gemini. The model is explicitly prompted to search and research the target company first (mission, flagship products, scale challenges, and engineering culture), eliminating generic AI clichés while remaining strictly grounded in verified candidate accomplishments.
 - **Multi-Criteria Job Matching**: Generates fit scores (0-100) combining technical skill overlap, seniority level, and workplace arrangements (Remote, Hybrid, On-site).
 - **Dual Document Rendering**:
   - *Browser Canvas*: Interactive LaTeX-style paper preview with side-by-side diff approvals and direct `.tex` export.
@@ -129,11 +130,13 @@ flowchart TD
         L --> G
         G --> H[Multi-Criteria Fit Score & Rationales]
         H --> I[TailoringService]
+        H --> CL[CoverLetterService / Company Research]
         I --> J[ClaimVerifier Anti-Hallucination Engine]
     end
 
     subgraph Rendering & Delivery
         J --> K1[Interactive LaTeX Paper UI]
+        CL --> K1
         J --> K2[ReportLab PDF Engine]
         K2 --> T
         K1 --> M[React / Vite Frontend]
@@ -303,7 +306,7 @@ Execute the comprehensive test suite verifying the deterministic parser, ClaimVe
 cd backend
 uv run pytest tests/unit/
 ```
-All 208 unit tests must pass without warnings.
+All 214 unit tests must pass without warnings.
 
 ### Run Frontend Typecheck and Build
 

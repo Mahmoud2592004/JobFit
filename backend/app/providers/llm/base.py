@@ -21,6 +21,7 @@ class LLMAdapter(Protocol):
         prompt: str,
         response_model: type[T],
         system_instruction: str | None = None,
+        temperature: float | None = None,
     ) -> T:
         """
         Send a prompt to the LLM and return a strictly validated Pydantic model.

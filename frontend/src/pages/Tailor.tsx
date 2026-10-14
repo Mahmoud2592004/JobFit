@@ -9,8 +9,11 @@ import {
   parseExperienceToCards,
   parseLeadershipToCards,
   parseProjectsToCards,
+  serializeCardsToExperience,
+  serializeCardsToProjects,
 } from '../lib/resumeParser';
 import { useApp } from '../store/AppContext';
+import { api } from '../api';
 import type { Draft, Job, Profile, TailoredResume, TemplateId } from '../types';
 
 type Tab = 'resume' | 'letter';
@@ -22,10 +25,11 @@ const TEMPLATES: { id: TemplateId; label: string }[] = [
   { id: 'tech', label: 'Tech minimal' },
 ];
 
-const REVIEW: { key: keyof Draft; label: string }[] = [
-  { key: 'summary', label: 'Summary' },
-  { key: 'skills', label: 'Skills' },
-  { key: 'experience', label: 'Experience order' },
+const REVIEW: { key: keyof Draft; label: string; badge?: string }[] = [
+  { key: 'summary', label: 'Professional Summary', badge: 'Tailored' },
+  { key: 'skills', label: 'Prioritized Skills', badge: 'Keywords' },
+  { key: 'experience', label: 'Experience & Bullet Points', badge: 'Action bullets' },
+  { key: 'projects', label: 'Tailored Projects', badge: 'Targeted' },
 ];
 
 export default function Tailor() {
@@ -49,11 +53,13 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
   const [variant, setVariant] = useState(0);
   const [proposal, setProposal] = useState(() => genProposal(job, profile, 0));
   const [cur, setCur] = useState<Draft>(() =>
-    existing ? { summary: existing.summary, skills: existing.skills, experience: existing.experience } : { ...proposal.original },
+    existing
+      ? { summary: existing.summary, skills: existing.skills, experience: existing.experience, projects: existing.projects }
+      : { ...proposal.original },
   );
   const [letter, setLetter] = useState(() => existing?.coverLetter ?? buildLetter(job, proposal.related, profile));
   const [decisions, setDecisions] = useState<Partial<Record<keyof Draft, Decision>>>(
-    existing ? { summary: 'a', skills: 'a', experience: 'a' } : {},
+    existing ? { summary: 'a', skills: 'a', experience: 'a', projects: 'a' } : {},
   );
   /** Bumped whenever the editable fields must be re-seeded from state (approve, keep, regenerate, tab switch). */
   const [seed, setSeed] = useState({ draft: cur, letter, version: 0 });
@@ -63,6 +69,12 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [isEditingExp, setIsEditingExp] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuccess, setAiSuccess] = useState(false);
+  const [letterLoading, setLetterLoading] = useState(false);
+  const [letterSuccess, setLetterSuccess] = useState(false);
+  const [letterCompanySummary, setLetterCompanySummary] = useState<string | null>(null);
+  const [copiedLetter, setCopiedLetter] = useState(false);
   const timer = useRef<number>();
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -87,19 +99,196 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
     reseed(next, letter);
   };
 
-  const regenerate = () => {
-    const v = variant + 1;
-    const p = genProposal(job, profile, v);
-    setVariant(v);
-    setProposal(p);
-    setDecisions({});
-    setCur({ ...p.original });
-    reseed({ ...p.original }, letter);
-  };
+  const fetchGeminiTailoring = useCallback(async () => {
+    setAiLoading(true);
+    setError('');
+    try {
+      const expCards = parseExperienceToCards(profile.experience || '');
+      const projCards = parseProjectsToCards(profile.projects || '');
+      const eduCards = parseEducationToCards(profile.education || '');
+
+      const candidateProfilePayload = {
+        name: profile.name,
+        summary: profile.summary,
+        skills: profile.skills ? profile.skills.split(',').map((s) => s.trim()).filter(Boolean) : [],
+        employment_history: expCards.map((c) => ({
+          company: c.company,
+          title: c.title,
+          start_date: c.startDate,
+          end_date: c.endDate,
+          location: c.location,
+          achievements: c.bullets,
+        })),
+        projects: projCards.map((p) => ({
+          name: p.title,
+          description: p.roleOrSubtitle,
+          technologies: p.technologies ? p.technologies.split(',').map((t) => t.trim()).filter(Boolean) : [],
+          achievements: p.bullets,
+        })),
+        education: eduCards.map((e) => ({
+          institution: e.institution,
+          degree: e.degree,
+          start_date: e.startDate,
+          end_date: e.endDate,
+          gpa: e.gpa,
+        })),
+      };
+
+      const jobPayload = {
+        title: job.title,
+        employer: job.company,
+        company: job.company,
+        description: job.description || (job.requirements ? job.requirements.join('\n') : ''),
+        requirements: job.requirements || [],
+      };
+
+      const res = await api.tailor.preview(jobPayload, candidateProfilePayload);
+      const tailored = res.data;
+      if (tailored) {
+        // Map tailored experience entries
+        const tailoredExpCards = (tailored.experience && tailored.experience.length > 0)
+          ? tailored.experience.map((e: any, idx: number) => {
+              const orig = expCards[idx] || expCards.find((c) => c.company.toLowerCase() === (e.company || '').toLowerCase());
+              return {
+                id: `ai-exp-${idx}`,
+                title: e.title || orig?.title || '',
+                company: e.company || orig?.company || '',
+                startDate: e.start_date || orig?.startDate || '',
+                endDate: e.end_date || orig?.endDate || '',
+                location: e.location || orig?.location || '',
+                mode: orig?.mode || '',
+                isCurrent: /present/i.test(e.end_date || orig?.endDate || ''),
+                bullets: (e.bullet_points && e.bullet_points.length > 0) ? e.bullet_points : (orig?.bullets || []),
+                links: orig?.links,
+              };
+            })
+          : expCards;
+        const tailoredExpText = serializeCardsToExperience(tailoredExpCards);
+
+        // Map tailored projects entries
+        const tailoredProjCards = (tailored.projects && tailored.projects.length > 0)
+          ? tailored.projects.map((p: any, idx: number) => {
+              const orig = projCards[idx] || projCards.find((c) => c.title.toLowerCase() === (p.name || '').toLowerCase());
+              return {
+                id: `ai-proj-${idx}`,
+                title: p.name || orig?.title || '',
+                roleOrSubtitle: p.description || orig?.roleOrSubtitle || '',
+                technologies: Array.isArray(p.technologies) ? p.technologies.join(', ') : (orig?.technologies || ''),
+                bullets: (p.bullet_points && p.bullet_points.length > 0) ? p.bullet_points : (orig?.bullets || []),
+                links: orig?.links,
+              };
+            })
+          : projCards;
+        const tailoredProjText = serializeCardsToProjects(tailoredProjCards);
+
+        const proposedSkills = Array.isArray(tailored.skills) ? tailored.skills.join(', ') : (tailored.skills || profile.skills);
+        const proposedSummary = tailored.summary || profile.summary;
+
+        setProposal({
+          related: Array.isArray(tailored.skills) ? tailored.skills : [],
+          original: {
+            summary: profile.summary,
+            skills: profile.skills,
+            experience: profile.experience,
+            projects: profile.projects,
+            leadership: profile.leadership,
+          },
+          proposed: {
+            summary: proposedSummary,
+            skills: proposedSkills,
+            experience: tailoredExpText,
+            projects: tailoredProjText,
+            leadership: profile.leadership,
+          },
+        });
+
+        setDecisions({});
+        setAiSuccess(true);
+      } else if (res.error) {
+        setError(res.error);
+      }
+    } catch (err: any) {
+      console.error('Gemini tailoring failed, using offline fallback:', err);
+      setError(err?.message || 'Gemini tailoring request failed. Showing offline suggestions.');
+    } finally {
+      setAiLoading(false);
+    }
+  }, [job, profile]);
+
+  const fetchGeminiCoverLetter = useCallback(async () => {
+    setLetterLoading(true);
+    setError('');
+    try {
+      const expCards = parseExperienceToCards(profile.experience || '');
+      const projCards = parseProjectsToCards(profile.projects || '');
+      const eduCards = parseEducationToCards(profile.education || '');
+
+      const candidateProfilePayload = {
+        name: profile.name,
+        summary: profile.summary,
+        skills: profile.skills ? profile.skills.split(',').map((s) => s.trim()).filter(Boolean) : [],
+        employment_history: expCards.map((c) => ({
+          company: c.company,
+          title: c.title,
+          start_date: c.startDate,
+          end_date: c.endDate,
+          location: c.location,
+          achievements: c.bullets,
+        })),
+        projects: projCards.map((p) => ({
+          name: p.title,
+          description: p.roleOrSubtitle,
+          technologies: p.technologies ? p.technologies.split(',').map((t) => t.trim()).filter(Boolean) : [],
+          achievements: p.bullets,
+        })),
+        education: eduCards.map((e) => ({
+          institution: e.institution,
+          degree: e.degree,
+          start_date: e.startDate,
+          end_date: e.endDate,
+          gpa: e.gpa,
+        })),
+      };
+
+      const jobPayload = {
+        title: job.title,
+        employer: job.company,
+        company: job.company,
+        description: job.description || (job.requirements ? job.requirements.join('\n') : ''),
+        requirements: job.requirements || [],
+      };
+
+      const res = await api.tailor.previewCoverLetter(jobPayload, candidateProfilePayload);
+      if (res.data && res.data.full_text) {
+        setLetter(res.data.full_text);
+        if (res.data.company_research_summary) {
+          setLetterCompanySummary(res.data.company_research_summary);
+        }
+        setSeed((s) => ({ ...s, letter: res.data.full_text, version: s.version + 1 }));
+        setLetterSuccess(true);
+      } else if (res.error) {
+        setError(res.error);
+      }
+    } catch (err: any) {
+      console.error('Gemini cover letter generation failed:', err);
+      setError(err?.message || 'Gemini cover letter generation failed. Showing offline draft.');
+    } finally {
+      setLetterLoading(false);
+    }
+  }, [job, profile]);
+
+  useEffect(() => {
+    if (!existing) {
+      fetchGeminiTailoring();
+    }
+  }, [existing, fetchGeminiTailoring]);
 
   const switchTab = (t: Tab) => {
     setTab(t);
     reseed(cur, letter);
+    if (t === 'letter' && !letterSuccess && !existing?.coverLetter) {
+      fetchGeminiCoverLetter();
+    }
   };
 
   const audit = auditSkills(cur.skills, profile);
@@ -107,7 +296,14 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
 
   const approve = () => {
     if (audit.flagged.length) return setError('Resolve the flagged skills before approving.');
-    actions.saveResume({ resumeId: existing?.id ?? null, jobId: job.id, template, ...cur, coverLetter: letter });
+    actions.saveResume({
+      resumeId: existing?.id ?? null,
+      jobId: job.id,
+      template,
+      ...cur,
+      projects: cur.projects || profile.projects,
+      coverLetter: letter,
+    });
     navigate('/res');
   };
 
@@ -153,6 +349,7 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
 
   const ellipsis = (s?: string) => (s || '').replace(/\n/g, ' / ').slice(0, 110);
   const leadershipText = cur.leadership || profile.leadership || '';
+  const projectsText = cur.projects || profile.projects || '';
 
   return (
     <>
@@ -163,7 +360,7 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
             <h2 style={{ fontSize: '1.35rem' }}>Tailor for {job.title}</h2>
             <p className="meta">{job.company} · needs {job.requirements.join(', ')}</p>
           </div>
-          <div className="row" style={{ alignItems: 'center' }}>
+          <div className="row" style={{ alignItems: 'center', gap: 8 }}>
             <span className="meta" role="status">{saving ? 'Saving…' : 'Saved ✓'}</span>
             <button className="btn o xs" onClick={() => setShowTex((s) => !s)}>{showTex ? 'Hide' : 'View'} .tex</button>
             <button className="btn o xs" onClick={() => window.print()}>Download PDF</button>
@@ -183,26 +380,115 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
         <div className="stack">
           {tab === 'resume' ? (
             <>
-              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3>Review suggested changes</h3>
-                <button className="btn g xs" onClick={regenerate}>Regenerate</button>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>Review suggested changes</h3>
+                  {aiSuccess && <span className="meta" style={{ color: '#16a34a', fontSize: '0.8rem' }}>✨ Powered by Gemini AI</span>}
+                </div>
+                <button
+                  className="btn xs"
+                  onClick={fetchGeminiTailoring}
+                  disabled={aiLoading}
+                  style={{
+                    background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 600,
+                  }}
+                >
+                  {aiLoading ? 'Tailoring…' : '✨ Regenerate with Gemini'}
+                </button>
               </div>
-              {REVIEW.map(({ key, label }) => {
+
+              {aiLoading && (
+                <div className="card" style={{ background: 'rgba(37,99,235,0.06)', border: '1px solid rgba(37,99,235,0.25)', padding: '12px 14px' }}>
+                  <div className="row" style={{ alignItems: 'center', gap: 10 }}>
+                    <span className="spinner" style={{ width: 16, height: 16 }} />
+                    <div>
+                      <strong style={{ fontSize: '0.9rem', color: '#1e40af' }}>Gemini is rewriting bullet points...</strong>
+                      <p className="meta" style={{ margin: 0, fontSize: '0.8rem' }}>
+                        Transforming achievements into action-verb bullets tailored for {job.title}.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {REVIEW.map(({ key, label, badge }) => {
                 const o = proposal.original[key];
                 const p = proposal.proposed[key];
                 const d = decisions[key];
-                if (o === p) return <div className="card rc" key={key}><h3>{label}</h3><p className="meta">No change suggested.</p></div>;
-                if (!p) return <div className="card rc" key={key}><h3>{label}</h3><p className="meta">Nothing to suggest yet. Add this to your profile first.</p></div>;
-                return (
-                  <div className="card rc" key={key}>
-                    <div className="row" style={{ justifyContent: 'space-between' }}>
-                      <h3>{label}</h3>
-                      {d ? <span className={`badge ${d === 'a' ? 's' : ''}`}>{d === 'a' ? 'Applied' : 'Kept original'}</span> : <span className="badge p">Suggested</span>}
+                if (!p && !o) return null;
+                if (o === p) {
+                  return (
+                    <div className="card rc" key={key}>
+                      <div className="row" style={{ justifyContent: 'space-between' }}>
+                        <h3>{label}</h3>
+                        <span className="badge s">Aligned</span>
+                      </div>
+                      <p className="meta" style={{ margin: '4px 0' }}>Current content matches target qualifications.</p>
                     </div>
-                    <p className="meta" style={{ margin: '6px 0' }}><s>{ellipsis(o) || '(empty)'}</s></p>
-                    <p style={{ fontSize: '.9rem' }}>{ellipsis(p)}</p>
-                    <div className="row" style={{ marginTop: 10 }}>
-                      <button className="btn xs" onClick={() => decide(key, 'a')}>&#10003; Approve and apply</button>
+                  );
+                }
+                return (
+                  <div className="card rc" key={key} style={{ borderLeft: d === 'a' ? '3px solid #10b981' : '3px solid #2563eb' }}>
+                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <h3 style={{ margin: 0 }}>{label}</h3>
+                        {badge && <span className="meta" style={{ fontSize: '0.75rem' }}>{badge}</span>}
+                      </div>
+                      {d ? (
+                        <span className={`badge ${d === 'a' ? 's' : ''}`}>{d === 'a' ? 'Applied ✓' : 'Kept original'}</span>
+                      ) : (
+                        <span className="badge p">AI Suggested</span>
+                      )}
+                    </div>
+
+                    <div style={{ margin: '10px 0', fontSize: '0.86rem' }}>
+                      {key === 'experience' && p ? (
+                        <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                          {parseExperienceToCards(p).map((item, idx) => (
+                            <div key={idx} style={{ marginBottom: 10, padding: '8px', background: 'rgba(37,99,235,0.04)', borderRadius: 6 }}>
+                              <strong style={{ display: 'block', color: '#163a5f', fontSize: '0.88rem' }}>
+                                {item.title} · {item.company}
+                              </strong>
+                              <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                                {item.bullets.map((b, bi) => (
+                                  <li key={bi} style={{ marginBottom: 4, lineHeight: 1.35 }}>
+                                    {b.replace(/^[-•*▪·–—\d.)\s]+/, '').trim()}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ))}
+                        </div>
+                      ) : key === 'projects' && p ? (
+                        <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                          {parseProjectsToCards(p).map((item, idx) => (
+                            <div key={idx} style={{ marginBottom: 10, padding: '8px', background: 'rgba(37,99,235,0.04)', borderRadius: 6 }}>
+                              <strong style={{ display: 'block', color: '#163a5f', fontSize: '0.88rem' }}>
+                                {item.title} {item.roleOrSubtitle && `(${item.roleOrSubtitle})`}
+                              </strong>
+                              <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                                {item.bullets.map((b, bi) => (
+                                  <li key={bi} style={{ marginBottom: 4, lineHeight: 1.35 }}>
+                                    {b.replace(/^[-•*▪·–—\d.)\s]+/, '').trim()}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <>
+                          <p className="meta" style={{ margin: '4px 0' }}><s>{ellipsis(o) || '(empty)'}</s></p>
+                          <p style={{ margin: '4px 0', color: '#111827', fontWeight: 500, lineHeight: 1.35 }}>{p}</p>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                      <button className="btn xs" onClick={() => decide(key, 'a')}>✓ Approve and apply</button>
                       <button className="btn g xs" onClick={() => decide(key, 'k')}>Keep original</button>
                     </div>
                   </div>
@@ -210,7 +496,75 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
               })}
             </>
           ) : (
-            <div className="card"><h3>Cover letter</h3><p className="meta">Written only from your profile. Edit freely.</p></div>
+            <div className="stack" style={{ gap: 12 }}>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>Cover letter</h3>
+                  {letterSuccess && (
+                    <span className="meta" style={{ color: '#16a34a', fontSize: '0.8rem' }}>
+                      ✨ Powered by Gemini (Researched {job.company})
+                    </span>
+                  )}
+                </div>
+                <button
+                  className="btn xs"
+                  onClick={fetchGeminiCoverLetter}
+                  disabled={letterLoading}
+                  style={{
+                    background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 600,
+                  }}
+                >
+                  {letterLoading ? 'Researching & Writing…' : '✨ Regenerate with Gemini'}
+                </button>
+              </div>
+
+              {letterLoading && (
+                <div className="card" style={{ background: 'rgba(37,99,235,0.06)', border: '1px solid rgba(37,99,235,0.25)', padding: '12px 14px' }}>
+                  <div className="row" style={{ alignItems: 'center', gap: 10 }}>
+                    <span className="spinner" style={{ width: 16, height: 16 }} />
+                    <div>
+                      <strong style={{ fontSize: '0.9rem', color: '#1e40af' }}>Gemini is researching {job.company}...</strong>
+                      <p className="meta" style={{ margin: 0, fontSize: '0.8rem' }}>
+                        Searching company mission, products, and culture to write a natural, deeply personalized cover letter.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {letterCompanySummary && (
+                <div className="card" style={{ borderLeft: '3px solid #2563eb', padding: '12px 14px' }}>
+                  <h4 style={{ margin: '0 0 4px', fontSize: '0.86rem', color: '#163a5f' }}>🔍 Company Intelligence Discovered</h4>
+                  <p style={{ margin: 0, fontSize: '0.82rem', color: '#374151', whiteSpace: 'pre-line', lineHeight: 1.45 }}>
+                    {letterCompanySummary}
+                  </p>
+                </div>
+              )}
+
+              <div className="card">
+                <h4 style={{ margin: '0 0 6px', fontSize: '0.88rem' }}>Tailoring Strategy</h4>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.82rem', color: '#4b5563', lineHeight: 1.45 }}>
+                  <li><strong>Researched First:</strong> Prompt directs Gemini to search and analyze {job.company}'s mission and products.</li>
+                  <li><strong>Natural & Human Voice:</strong> Eliminates robotic corporate clichés and boilerplate.</li>
+                  <li><strong>Factual Grounding:</strong> Strictly anchored in verified accomplishments from your profile.</li>
+                </ul>
+                <div className="row" style={{ marginTop: 12, gap: 8 }}>
+                  <button
+                    className="btn g xs"
+                    onClick={() => {
+                      navigator.clipboard.writeText(letter);
+                      setCopiedLetter(true);
+                      setTimeout(() => setCopiedLetter(false), 2000);
+                    }}
+                  >
+                    {copiedLetter ? 'Copied ✓' : '📋 Copy Cover Letter'}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
           <div className="card">
             <h3>Truth check</h3>
@@ -445,12 +799,12 @@ function TailorEditor({ job, profile, existing }: EditorProps) {
                   </div>
                 )}
 
-                {profile.projects && (
+                {projectsText && (
                   <div className="resume-section">
                     <div className="resume-section-header">
                       <h4>Projects</h4>
                     </div>
-                    {parseProjectsToCards(profile.projects).map((item, idx) => (
+                    {parseProjectsToCards(projectsText).map((item, idx) => (
                       <div className="resume-entry" key={idx}>
                         <div className="entry-header">
                           <div className="entry-left">

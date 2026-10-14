@@ -48,6 +48,7 @@ class GeminiAdapter(LLMAdapter):
         prompt: str,
         response_model: type[T],
         system_instruction: str | None = None,
+        temperature: float | None = None,
     ) -> T:
         """Generate structured data adhering to response_model."""
         max_retries = 3
@@ -62,6 +63,8 @@ class GeminiAdapter(LLMAdapter):
             f"{system_instruction}\n\n{schema_desc}" if system_instruction else schema_desc
         )
 
+        eff_temperature = 0.1 if temperature is None else temperature
+
         for attempt in range(1, max_retries + 1):
             try:
                 model = self._genai.GenerativeModel(
@@ -69,7 +72,7 @@ class GeminiAdapter(LLMAdapter):
                     system_instruction=instruction,
                     generation_config={
                         "response_mime_type": "application/json",
-                        "temperature": 0.1,  # low temperature for deterministic factual extraction
+                        "temperature": eff_temperature,
                     },
                 )
 

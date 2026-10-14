@@ -94,6 +94,7 @@ export interface ResumePayload {
   summary: string;
   skills: string;
   experience: string;
+  projects?: string;
   coverLetter: string;
 }
 
@@ -211,6 +212,7 @@ function reducer(state: AppState, action: Action): AppState {
         summary: p.summary,
         skills: p.skills,
         experience: p.experience,
+        projects: p.projects,
         coverLetter: p.coverLetter,
       };
       let resumes: TailoredResume[];

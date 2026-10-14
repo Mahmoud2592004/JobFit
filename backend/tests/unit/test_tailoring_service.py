@@ -199,3 +199,86 @@ async def test_approve_and_download_document():
 
     fetched = await service.get_document_with_url(user_id=uid, doc_id=did)
     assert fetched["download_url"] == "https://signed-url.pdf"
+
+
+@pytest.mark.asyncio
+async def test_tailor_resume_with_projects_and_education():
+    jid = uuid4()
+    uid = uuid4()
+    pvid = uuid4()
+    doc_id = uuid4()
+
+    from app.schemas.tailoring import TailoredEducationEntry, TailoredProjectEntry
+
+    canned = TailoredResumeContent(
+        headline="Senior Python Developer",
+        summary="Specialist in Python and distributed systems.",
+        skills=["Python", "FastAPI"],
+        experience=[
+            TailoredExperienceEntry(
+                company="Apex AI",
+                title="Backend Engineer",
+                bullet_points=[
+                    "Architected high-throughput FastAPI microservices reducing latency by 40%.",
+                    "Spearheaded distributed job processing pipeline handling 1M daily tasks.",
+                ],
+            )
+        ],
+        projects=[
+            TailoredProjectEntry(
+                name="AI Job Search Agent",
+                bullet_points=[
+                    "Engineered asynchronous scraping and parsing engine with Gemini integration.",
+                ],
+                technologies=["Python", "FastAPI"],
+            )
+        ],
+        education=[
+            TailoredEducationEntry(
+                institution="MIT",
+                degree="B.S. Computer Science",
+                coursework=["Distributed Systems", "Algorithms"],
+            )
+        ],
+    )
+
+    mock_llm = MockLLMAdapter(canned_response=canned)
+    mock_tailored_repo = MagicMock()
+    mock_profile_repo = MagicMock()
+    mock_job_repo = MagicMock()
+    mock_storage = MagicMock()
+
+    mock_job_repo.get_job = AsyncMock(return_value=make_job(str(jid)))
+    mock_profile_repo.get_active_profile_version = AsyncMock(
+        return_value={"id": str(pvid), "profile_data": make_profile()}
+    )
+    mock_profile_repo.get_profile = AsyncMock(return_value={"display_name": "Test User"})
+    mock_tailored_repo.create_document = AsyncMock(
+        return_value={"id": str(doc_id), "status": "generating"}
+    )
+    mock_tailored_repo.update_document = AsyncMock(
+        side_effect=lambda doc_id, user_id, updates: {"id": str(doc_id), **updates}
+    )
+    mock_storage.upload_file = AsyncMock(return_value="path.pdf")
+    mock_storage.create_signed_url = AsyncMock(return_value="https://signed.pdf")
+
+    service = TailoringService(
+        llm=mock_llm,
+        tailored_repo=mock_tailored_repo,
+        profile_repo=mock_profile_repo,
+        job_repo=mock_job_repo,
+        storage=mock_storage,
+    )
+
+    res = await service.tailor_resume_for_job(user_id=uid, job_id=jid)
+
+    assert res["status"] == "approved"
+    assert res["validation_passed"] is True
+    content = res["structured_content"]
+    assert len(content["experience"][0]["bullet_points"]) == 2
+    assert "Architected high-throughput" in content["experience"][0]["bullet_points"][0]
+    assert len(content["projects"]) == 1
+    assert len(content["projects"][0]["bullet_points"]) == 1
+    assert "Engineered asynchronous" in content["projects"][0]["bullet_points"][0]
+    assert len(content["education"]) == 1
+    assert content["education"][0]["coursework"] == ["Distributed Systems", "Algorithms"]

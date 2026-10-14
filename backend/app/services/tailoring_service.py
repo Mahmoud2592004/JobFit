@@ -31,21 +31,32 @@ log = structlog.get_logger(__name__)
 _TAILORING_SYSTEM_PROMPT = """
 You are an expert executive resume tailoring strategist with strict factual rigor.
 Your mission is to tailor a candidate's resume specifically for a target job listing
-in an ATS-friendly, LaTeX-quality format.
+in an ATS-friendly, high-impact format.
 
-CRITICAL INVENTIVENESS PROHIBITIONS & TAILORING RULES:
-1. ONLY utilize employment history, companies, job titles, dates, degrees, and skills
-   present in the candidate's verified profile data.
-2. DO NOT invent employers, job titles, degrees, certifications, or metrics not grounded in facts.
-3. Prioritize and select existing candidate skills that directly align with target qualifications.
-4. EXPERIENCE: You MUST include ALL employment history entries from the candidate profile.
-   Keep exact company names, locations, and job titles. For each role, provide 2 to 4 crisp,
-   impactful, quantified bullet points tailored to emphasize relevant qualifications,
-   strictly derived from candidate achievements and descriptions.
-5. PROJECTS: Include all relevant projects from candidate profile with title, concise
-   job-relevant description/bullet highlights, and key technologies.
-6. EDUCATION & CERTIFICATIONS: Preserve all degrees, universities, and certifications.
-7. Tone must be professional, action-verb driven, concise, and structured with clean bullet points.
+CORE DIRECTIVE - ACTIVE TAILORING & REWRITING:
+You MUST actively rewrite and customize the bullet points for work experience and projects
+to directly align with the qualifications, technical keywords, and responsibilities demanded
+by the target job listing. Do NOT merely copy existing bullet points or descriptions verbatim.
+
+TAILORING RULES & RIGOROUS FACTUAL BOUNDARIES:
+1. FACTUAL GROUNDING: Anchor every claim in the candidate's actual profile facts.
+   - ONLY utilize employers, job titles, dates, degrees, projects, and skills present in candidate profile data.
+   - DO NOT fabricate employers, job titles, unearned degrees, or unmentioned technologies.
+   - Keep factual metrics, team sizes, and genuine achievements grounded in the profile facts.
+2. EXPERIENCE BULLET TAILORING:
+   - Include ALL employment history entries from the candidate profile with exact company names, dates, and titles.
+   - For each role, produce 2 to 4 crisp, high-impact bullet points.
+   - Actively rephrase each bullet point using strong action verbs (e.g., "Architected", "Engineered", "Streamlined", "Spearheaded") that highlight how the candidate's past work directly relates to the target job's tech stack and requirements.
+   - Elevate the most relevant achievements to the top of each role.
+3. PROJECTS TAILORING:
+   - For each relevant project, generate 1 to 3 tailored bullet points detailing the problem solved, technologies utilized, and quantifiable impact, customized to emphasize relevance to the target job.
+4. EDUCATION & COURSEWORK:
+   - Preserve degree, institution, and graduation dates.
+   - If relevant to the target job requirements, include matching coursework in the coursework field.
+5. SKILLS CURATION:
+   - Prioritize and lead with candidate skills that directly map to the target job qualifications.
+6. TONE & STYLE:
+   - Professional, concise, action-verb driven, ATS-optimized, with no fluff or filler phrases.
 """
 
 
@@ -66,6 +77,46 @@ class TailoringService:
         self.job_repo = job_repo
         self.storage = storage
         self.settings = get_settings()
+
+    async def generate_tailored_content(
+        self,
+        job: dict[str, Any],
+        profile_data: dict[str, Any],
+        target_role_notes: str | None = None,
+    ) -> TailoredResumeContent:
+        """
+        Invoke Gemini directly to tailor headline, summary, skills, experience bullet points,
+        and projects for the target job while preserving factual accuracy.
+        """
+        notes_section = (
+            f"Candidate Focus / Role Notes: {target_role_notes}\n\n"
+            if target_role_notes
+            else ""
+        )
+        prompt = (
+            f"=== TARGET JOB LISTING ===\n"
+            f"Title: {job.get('title')}\n"
+            f"Company: {job.get('employer') or job.get('company')}\n"
+            f"Description:\n{job.get('description') or ''}\n\n"
+            f"{notes_section}"
+            f"=== CANDIDATE PROFILE ===\n"
+            f"{json.dumps(profile_data, indent=2)}\n\n"
+            f"=== OBJECTIVE ===\n"
+            f"Tailor the resume for the target job listing above.\n"
+            f"1. Generate a compelling target headline and professional summary.\n"
+            f"2. Curate and prioritize skills matching the job description.\n"
+            f"3. Actively rewrite each employment experience entry with 2-4 tailored, action-oriented bullet points emphasizing relevance to the job requirements while retaining factual integrity.\n"
+            f"4. Tailor project descriptions and bullet points to highlight the relevant tech stack and impact.\n"
+            f"5. Populate education and relevant coursework.\n"
+            f"Return the tailored resume strictly conforming to the JSON schema."
+        )
+
+        return await self.llm.extract_structured(
+            prompt=prompt,
+            response_model=TailoredResumeContent,
+            system_instruction=_TAILORING_SYSTEM_PROMPT,
+            temperature=0.4,
+        )
 
     async def tailor_resume_for_job(
         self,
@@ -112,25 +163,10 @@ class TailoringService:
 
         try:
             # 4. Invoke LLM for structured tailoring
-            notes_section = (
-                f"Candidate Focus / Role Notes: {target_role_notes}\n\n"
-                if target_role_notes
-                else ""
-            )
-            prompt = (
-                f"Candidate Profile:\n{json.dumps(profile_data, indent=2)}\n\n"
-                f"Target Job:\n"
-                f"Title: {job.get('title')}\n"
-                f"Company: {job.get('employer')}\n"
-                f"Description: {job.get('description')}\n\n"
-                f"{notes_section}"
-                f"Tailor the resume specifically for this position following the strict rules."
-            )
-
-            tailored_content: TailoredResumeContent = await self.llm.extract_structured(
-                prompt=prompt,
-                response_model=TailoredResumeContent,
-                system_instruction=_TAILORING_SYSTEM_PROMPT,
+            tailored_content = await self.generate_tailored_content(
+                job=job,
+                profile_data=profile_data,
+                target_role_notes=target_role_notes,
             )
 
             latency_ms = int((time.perf_counter() - start_time) * 1000)

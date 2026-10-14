@@ -114,6 +114,7 @@ export interface TailoredResume {
   skills: string;
   experience: string;
   leadership?: string;
+  projects?: string;
   coverLetter: string;
 }
 
@@ -136,6 +137,7 @@ export interface Draft {
   skills: string;
   experience: string;
   leadership?: string;
+  projects?: string;
 }
 
 export interface JobFilters {

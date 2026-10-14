@@ -20,10 +20,15 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.tailored_document_repository import TailoredDocumentRepository
 from app.schemas.tailoring import (
+    CoverLetterContent,
+    CoverLetterPreviewRequest,
     TailoredDocumentResponse,
+    TailoredResumeContent,
+    TailorPreviewRequest,
     TailorResumeRequest,
     UpdateTailoredContentRequest,
 )
+from app.services.cover_letter_service import CoverLetterService
 from app.services.tailoring_service import TailoringService
 
 router = APIRouter(prefix="/tailored-documents", tags=["Tailored Resumes"])
@@ -50,6 +55,57 @@ def get_tailoring_service(
         job_repo=job_repo,
         storage=storage,
     )
+
+
+def get_cover_letter_service(
+    llm: Annotated[LLMAdapter, Depends(get_llm_adapter)],
+) -> CoverLetterService:
+    """Dependency factory for CoverLetterService."""
+    return CoverLetterService(llm=llm)
+
+
+@tailor_action_router.post(
+    "/preview",
+    response_model=TailoredResumeContent,
+    status_code=status.HTTP_200_OK,
+    summary="Generate tailored resume content with Gemini",
+)
+async def preview_tailored_resume(
+    payload: TailorPreviewRequest,
+    service: Annotated[TailoringService, Depends(get_tailoring_service)],
+) -> TailoredResumeContent:
+    """
+    Generate structured tailored resume with rewritten bullet points via Gemini
+    directly from target job and candidate profile facts.
+    """
+    return await service.generate_tailored_content(
+        job=payload.job,
+        profile_data=payload.candidate_profile,
+        target_role_notes=payload.target_role_notes,
+    )
+
+
+@tailor_action_router.post(
+    "/cover-letter/preview",
+    response_model=CoverLetterContent,
+    status_code=status.HTTP_200_OK,
+    summary="Generate tailored personalized cover letter with Gemini",
+)
+async def preview_cover_letter(
+    payload: CoverLetterPreviewRequest,
+    service: Annotated[CoverLetterService, Depends(get_cover_letter_service)],
+) -> CoverLetterContent:
+    """
+    Generate an authentic, deeply personalized, natural cover letter using Gemini,
+    with prompt instructions to search/research first about the company.
+    """
+    return await service.generate_cover_letter(
+        job=payload.job,
+        candidate_profile=payload.candidate_profile,
+        target_role_notes=payload.target_role_notes,
+        tone=payload.tone,
+    )
+
 
 
 @tailor_action_router.post(

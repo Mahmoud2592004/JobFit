@@ -391,6 +391,28 @@ export const api = {
   },
 
   tailor: {
+    async preview(job: any, candidateProfile: any, targetRoleNotes?: string) {
+      return request<any>('/tailor/preview', {
+        method: 'POST',
+        body: JSON.stringify({
+          job,
+          candidate_profile: candidateProfile,
+          target_role_notes: targetRoleNotes,
+        }),
+      });
+    },
+    async previewCoverLetter(job: any, candidateProfile: any, targetRoleNotes?: string, tone = 'natural_conversational') {
+      return request<any>('/tailor/cover-letter/preview', {
+        method: 'POST',
+        body: JSON.stringify({
+          job,
+          candidate_profile: candidateProfile,
+          target_role_notes: targetRoleNotes,
+          tone,
+        }),
+      });
+    },
+
     async generate(jobId: string, targetRoleNotes?: string) {
       return request<any>('/tailor', {
         method: 'POST',
